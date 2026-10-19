@@ -27,10 +27,10 @@ ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
 
 COLUMNS = [
     ("num", "#", 60),
-    ("src", "Source", 170),
-    ("dst", "Destination", 170),
-    ("start", "Start", 200),
-    ("end", "End", 200),
+    ("src", "Source", 160),
+    ("dst", "Destination", 160),
+    ("start", "Start", 225),
+    ("end", "End", 225),
     ("duration", "Duration, s", 100),
     ("status", "Closed by", 90),
 ]
