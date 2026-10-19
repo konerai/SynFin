@@ -7,6 +7,8 @@
 
 namespace po = boost::program_options;
 
+static const char* const kVersion = "0.2.0";
+
 int main(int argc, char* argv[]) {
     std::vector<std::string> input_files;
     std::string input_dir;
@@ -17,6 +19,7 @@ int main(int argc, char* argv[]) {
     po::options_description desc("Allowed options");
     desc.add_options()
         ("help,h", "Show help")
+        ("version,v", "Show version")
         ("input,i", po::value<std::vector<std::string>>(&input_files)->multitoken(), "Input pcap files")
         ("dir,d", po::value<std::string>(&input_dir), "Input directory containing pcap files")
         ("timeout,t", po::value<long>(&timeout), "Session timeout in seconds")
@@ -34,6 +37,11 @@ int main(int argc, char* argv[]) {
 
     if (vm.count("help")) {
         std::cout << desc << std::endl;
+        return 0;
+    }
+
+    if (vm.count("version")) {
+        std::cout << "TCP_Analysis " << kVersion << std::endl;
         return 0;
     }
 

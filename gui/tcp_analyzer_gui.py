@@ -25,6 +25,13 @@ BINARY_CANDIDATES = [
 PCAP_EXTENSIONS = (".pcap",)
 ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
 
+CLOSED_BY_LABELS = {
+    "fin": "FIN",
+    "rst": "RST",
+    "timeout": "timeout",
+    "end_of_capture": "still open",
+}
+
 COLUMNS = [
     ("num", "#", 60),
     ("src", "Source", 160),
@@ -41,6 +48,13 @@ def find_default_binary():
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
     return shutil.which("TCP_Analysis") or BINARY_CANDIDATES[0]
+
+
+def closed_by(session):
+    reason = session.get("closed_by")
+    if reason is None:  # analyzer older than 0.2.0
+        return "timeout" if session.get("timeout") else "FIN/RST"
+    return CLOSED_BY_LABELS.get(reason, reason)
 
 
 def format_ts(ts):
@@ -63,6 +77,7 @@ class AnalyzerApp:
         self.events = queue.Queue()
         self.sessions = []  # raw JSON objects, in the order they arrived
         self.timeouts = 0
+        self.still_open = 0
         self.finished = False
 
         self.binary_var = tk.StringVar(value=find_default_binary())
@@ -129,6 +144,7 @@ class AnalyzerApp:
             self.table.heading(key, text=title, command=lambda k=key: self._sort_by(k, False))
             self.table.column(key, width=width, anchor=tk.W, stretch=key in ("src", "dst"))
         self.table.tag_configure("timeout", foreground="#b35c00")
+        self.table.tag_configure("open", foreground="#2f6fb0")
         yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
         self.table.configure(yscrollcommand=yscroll.set)
         self.table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -269,6 +285,8 @@ class AnalyzerApp:
         self.sessions.append(session)
         if session.get("timeout"):
             self.timeouts += 1
+        elif session.get("closed_by") == "end_of_capture":
+            self.still_open += 1
         if self._matches_filter(session):
             self._insert_row(len(self.sessions), session)
 
@@ -291,11 +309,16 @@ class AnalyzerApp:
             format_ts(start),
             format_ts(end),
             f"{to_seconds(end) - to_seconds(start):.6f}",
-            "timeout" if s.get("timeout") else "FIN/RST",
+            closed_by(s),
         )
 
     def _insert_row(self, num, session):
-        tags = ("timeout",) if session.get("timeout") else ()
+        if session.get("timeout"):
+            tags = ("timeout",)
+        elif session.get("closed_by") == "end_of_capture":
+            tags = ("open",)
+        else:
+            tags = ()
         self.table.insert("", tk.END, values=self._row_values(num, session), tags=tags)
 
     def _matches_filter(self, session):
@@ -329,6 +352,7 @@ class AnalyzerApp:
     def _clear_results(self):
         self.sessions.clear()
         self.timeouts = 0
+        self.still_open = 0
         self.finished = False
         self.table.delete(*self.table.get_children())
         self.log.configure(state=tk.NORMAL)
@@ -340,7 +364,8 @@ class AnalyzerApp:
         total = len(self.sessions)
         state = "Analyzing…" if self.process else ("Done" if self.finished else "Ready")
         self.status_var.set(
-            f"{state}   Sessions: {total}   Timed out: {self.timeouts}   Shown: {shown}"
+            f"{state}   Sessions: {total}   Timed out: {self.timeouts}   "
+            f"Still open: {self.still_open}   Shown: {shown}"
         )
 
     def _log(self, text):

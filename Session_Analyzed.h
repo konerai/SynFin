@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <boost/lockfree/queue.hpp>
 #include <ctime>
+#include <sys/time.h>
 #include <json/json.h>
 #include <unistd.h>
 #include <thread>
@@ -75,7 +76,8 @@ public:
         int packetCount = 0;
         const int CHECK_TIMEOUT_INTERVAL = 1000;
 
-        while (int ret = pcap_next_ex(handle, &header, &packet) >= 0) {
+        int ret;
+        while ((ret = pcap_next_ex(handle, &header, &packet)) >= 0) {
             if (ret == 0) continue;
 
             PacketContext ctx;
@@ -100,6 +102,7 @@ public:
             if (++packetCount % CHECK_TIMEOUT_INTERVAL == 0) {
                 PacketData timeoutCmd;
                 timeoutCmd.type = PacketType::TimeoutCheck;
+                timeoutCmd.header = *header; // idle time is measured against capture time
                 timeoutCmd.packet = nullptr;
 
                 for (auto& q : workerQueues) {
@@ -110,11 +113,16 @@ public:
             }
         }
 
+        if (ret == PCAP_ERROR) {
+            std::cerr << "Error reading file " << filename << ": " << pcap_geterr(handle) << std::endl;
+        }
+
         pcap_close(handle);
     }
 
 private:
     enum class PacketType { Data, TimeoutCheck };
+    enum class CloseReason { Fin, Rst, Timeout, EndOfCapture };
 
     struct PacketData {
         PacketType type;
@@ -190,6 +198,9 @@ private:
         bool FIN1 = false;
         bool FIN2 = false;
 
+        // Which endpoint of the SessionKey opened the session; reported as "source".
+        bool initiator_is_ip1 = true;
+
         void updateElapsedTime(const struct timeval& current_time) {
             elapsed_time = (current_time.tv_sec - end_time.tv_sec) * 1000000 + 
                           (current_time.tv_usec - end_time.tv_usec);
@@ -205,11 +216,11 @@ private:
     struct FinalSession {
         SessionKey key;
         SessionInfo info;
-        bool timeout;
+        CloseReason reason;
 
         FinalSession() = default;
-        FinalSession(const SessionKey& k, const SessionInfo& s, bool t)
-            : key(k), info(s), timeout(t) {}
+        FinalSession(const SessionKey& k, const SessionInfo& s, CloseReason r)
+            : key(k), info(s), reason(r) {}
     };
 
     static bool ExtractPacketContext(const struct pcap_pkthdr* header, const u_char* packet, PacketContext& ctx) {
@@ -244,8 +255,13 @@ private:
         return true;
     }
 
-    void ProcessPacket(const struct pcap_pkthdr* header, const u_char* packet, 
-                      std::unordered_map<SessionKey, SessionInfo, SessionKeyHash>& sessions) {
+    using SessionMap = std::unordered_map<SessionKey, SessionInfo, SessionKeyHash>;
+    // Sessions closed by FIN/RST, with the time of their last packet. Kept for --timeout
+    // so that trailing packets (the final ACK, retransmitted FIN/RST) don't open a new session.
+    using ClosedMap = std::unordered_map<SessionKey, struct timeval, SessionKeyHash>;
+
+    void ProcessPacket(const struct pcap_pkthdr* header, const u_char* packet,
+                      SessionMap& sessions, ClosedMap& closed) {
         PacketContext ctx;
         if (!ExtractPacketContext(header, packet, ctx)) 
             return;
@@ -256,8 +272,22 @@ private:
         if (it != sessions.end()) {
             session = &it->second;
         } else {
+            auto closed_it = closed.find(ctx.key);
+            if (closed_it != closed.end()) {
+                if (!(ctx.tcp_header->th_flags & TH_SYN)) {
+                    closed_it->second = header->ts;
+                    return;
+                }
+                closed.erase(closed_it); // a new connection reusing the same ports
+            }
+
             session = &sessions[ctx.key];
             session->start_time = header->ts;
+
+            // The sender of the first packet opened the session, unless that packet is a
+            // SYN-ACK (the capture started mid-handshake): then its receiver did.
+            bool syn_ack = (ctx.tcp_header->th_flags & TH_SYN) && (ctx.tcp_header->th_flags & TH_ACK);
+            session->initiator_is_ip1 = ctx.key.is_original_direction != syn_ack;
         }
 
         session->end_time = header->ts;
@@ -267,7 +297,8 @@ private:
         bool rst = ctx.tcp_header->th_flags & TH_RST;
 
         if (rst) {
-            EnqueueSessionForOutput(ctx.key, *session);
+            EnqueueSessionForOutput(ctx.key, *session, CloseReason::Rst);
+            closed[ctx.key] = header->ts;
             sessions.erase(ctx.key);
             return;
         }
@@ -280,21 +311,29 @@ private:
             }
 
             if (session->FIN1 && session->FIN2) {
-                EnqueueSessionForOutput(ctx.key, *session);
+                EnqueueSessionForOutput(ctx.key, *session, CloseReason::Fin);
+                closed[ctx.key] = header->ts;
                 sessions.erase(ctx.key);
             }
         }
     }
 
-    void CheckForTimeouts(std::unordered_map<SessionKey, SessionInfo, SessionKeyHash>& sessions) {
-        struct timeval current_time;
-        gettimeofday(&current_time, NULL);
-        
+    void CheckForTimeouts(SessionMap& sessions, ClosedMap& closed, const struct timeval& current_time) {
         for (auto it = sessions.begin(); it != sessions.end();) {
             it->second.updateElapsedTime(current_time);
             if (it->second.elapsed_time > sessionTimeout * 1000000) {
-                EnqueueSessionForOutput(it->first, it->second, true);
+                EnqueueSessionForOutput(it->first, it->second, CloseReason::Timeout);
                 it = sessions.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        for (auto it = closed.begin(); it != closed.end();) {
+            long idle = (current_time.tv_sec - it->second.tv_sec) * 1000000 +
+                        (current_time.tv_usec - it->second.tv_usec);
+            if (idle > sessionTimeout * 1000000) {
+                it = closed.erase(it);
             } else {
                 ++it;
             }
@@ -302,21 +341,27 @@ private:
     }
 
     void WorkerThread(boost::lockfree::queue<PacketData>* queue) {
-        std::unordered_map<SessionKey, SessionInfo, SessionKeyHash> sessions;
+        SessionMap sessions;
+        ClosedMap closed;
         PacketData packetData;
+        struct timeval latest_time = {0, 0}; // newest capture timestamp this worker has seen
 
         while (!stopProcessing.load() || !queue->empty()) {
             if (queue->pop(packetData)) {
+                if (timercmp(&packetData.header.ts, &latest_time, >)) {
+                    latest_time = packetData.header.ts;
+                }
                 if (packetData.type == PacketType::Data) {
                     ProcessPacket(
                         &packetData.header,
                         packetData.packet->data(),
-                        sessions
+                        sessions,
+                        closed
                     );
                     delete packetData.packet;
                 } 
                 else if (packetData.type == PacketType::TimeoutCheck) {
-                    CheckForTimeouts(sessions);
+                    CheckForTimeouts(sessions, closed, packetData.header.ts);
                 }
             } else {
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
@@ -328,10 +373,17 @@ private:
                 delete packetData.packet;
             }
         }
+
+        // Input is exhausted: report what is left instead of dropping it.
+        CheckForTimeouts(sessions, closed, latest_time);
+        for (const auto& entry : sessions) {
+            EnqueueSessionForOutput(entry.first, entry.second, CloseReason::EndOfCapture);
+        }
+        sessions.clear();
     }
 
-    void EnqueueSessionForOutput(const SessionKey& key, const SessionInfo& session, bool timeout = false) {
-        FinalSession fs(key, session, timeout);
+    void EnqueueSessionForOutput(const SessionKey& key, const SessionInfo& session, CloseReason reason) {
+        FinalSession fs(key, session, reason);
         int back_off = 1;
         const int max_back_off = 100;
 
@@ -347,14 +399,14 @@ private:
             while (outputQueue.pop(fs)) {
                 const SessionKey& key = fs.key;
                 const SessionInfo& session = fs.info;
-                bool timeout = fs.timeout;
+                bool timeout = fs.reason == CloseReason::Timeout;
     
                 Json::Value session_info;
     
                 uint32_t src_ip, dst_ip;
                 uint16_t src_port, dst_port;
     
-                if (key.is_original_direction) {
+                if (session.initiator_is_ip1) {
                     src_ip = key.ip1;
                     src_port = key.port1;
                     dst_ip = key.ip2;
@@ -406,6 +458,7 @@ private:
                 }else{
                     oss << ", \"timeout\":false";
                 }
+                oss << ",\"closed_by\":\"" << CloseReasonName(fs.reason) << "\"";
                 oss << "}";
                 
                 std::cout << oss.str() << "\n";
@@ -414,6 +467,16 @@ private:
         }
     }
     
+
+    static const char* CloseReasonName(CloseReason reason) {
+        switch (reason) {
+            case CloseReason::Fin: return "fin";
+            case CloseReason::Rst: return "rst";
+            case CloseReason::Timeout: return "timeout";
+            case CloseReason::EndOfCapture: return "end_of_capture";
+        }
+        return "unknown";
+    }
 
     long sessionTimeout;
     unsigned int numThreads;
