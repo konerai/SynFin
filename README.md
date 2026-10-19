@@ -209,7 +209,3 @@ The GUI is a thin wrapper: it starts `TCP_Analysis -t <timeout> -j <threads> -i 
 - **Sessions still open at the end of the input are not reported.** Only sessions closed by FIN/RST or the timeout check appear in the output.
 - Only Ethernet-framed IPv4/TCP is analyzed; IPv6, VLAN-tagged frames and other link layers are skipped. `--dir` and the GUI's **Add folder…** pick up only `.pcap` files (not `.pcapng`).
 - The `-q`/`--queue-size` option is parsed but not yet wired into `SessionAnalyzer`'s internal queue sizes.
-
-## License
-
-No license has been specified for this project. All rights reserved by the author unless stated otherwise.
