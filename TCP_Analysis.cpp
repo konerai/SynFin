@@ -1,5 +1,6 @@
 #include "Session_Analyzed.h"
 #include <boost/program_options.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
 #include <vector>
@@ -11,6 +12,7 @@ int main(int argc, char* argv[]) {
     std::string input_dir;
     long timeout = 600;
     unsigned int queue_size = 2048;
+    unsigned int num_threads = std::max(1u, std::thread::hardware_concurrency());
 
     po::options_description desc("Allowed options");
     desc.add_options()
