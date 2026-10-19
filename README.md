@@ -72,6 +72,24 @@ Or point it at a directory and it will pick up every `.pcap` file in it:
 
 `--input`/`-i` and `--dir`/`-d` can be combined; at least one input file must be found or the tool exits with an error.
 
+## Graphical interface
+
+`gui/tcp_analyzer_gui.py` is a small Tkinter front end for Linux: pick `.pcap` files (or a whole folder), set the timeout and thread count, press **Analyze**, and every session shows up in a sortable table (timed-out sessions are highlighted). The table can be filtered by IP/port and exported to CSV or JSON Lines.
+
+It only needs Python 3 with Tkinter:
+
+```bash
+sudo apt-get install python3-tk
+```
+
+Build the analyzer first (see above), then from the project root:
+
+```bash
+python3 gui/tcp_analyzer_gui.py
+```
+
+The GUI looks for the binary at `build/TCP_Analysis`; another location can be chosen with **Browse…**.
+
 ## Output format
 
 Each completed session is printed to `stdout` as a single-line JSON object:
@@ -86,7 +104,6 @@ Each completed session is printed to `stdout` as a single-line JSON object:
 
 ## Known limitations
 
-- The current source references an undeclared `num_threads` variable in `TCP_Analysis.cpp`, which needs to be fixed (e.g. declared and defaulted to `std::thread::hardware_concurrency()`) before the project will compile.
 - The `-q`/`--queue-size` option is parsed but not yet wired into `SessionAnalyzer`'s internal queue sizes.
 
 ## License
