@@ -4,7 +4,9 @@
 #include <cstdint>
 
 #define TH_FIN 0x01
+#define TH_SYN 0x02
 #define TH_RST 0x04
+#define TH_ACK 0x10
 #define ETHERTYPE_IP 0x0800
 
 #pragma pack(push, 1)

@@ -1,6 +1,6 @@
 # TCP-IP_Analyzed
 
-A multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each finished session — its endpoints (IP and port), start/end timestamps, and whether it closed normally (FIN/RST) or timed out. It comes with two front ends:
+A multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
 
 - **`TCP_Analysis`** — the command-line analyzer; prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
 - **TCP Session Analyzer GUI** — a small desktop window (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table.
@@ -12,6 +12,7 @@ It's built for offline analysis of large packet captures: instead of loading a w
 ## Contents
 
 - [Where it runs](#where-it-runs)
+- [Download](#download)
 - [Requirements](#requirements)
 - [Building](#building)
 - [Graphical interface](#graphical-interface)
@@ -19,6 +20,7 @@ It's built for offline analysis of large packet captures: instead of loading a w
 - [Output format](#output-format)
 - [How it works](#how-it-works)
 - [Project layout](#project-layout)
+- [Tests](#tests)
 - [Known limitations](#known-limitations)
 
 ## Where it runs
@@ -35,6 +37,19 @@ Tested builds:
 Other distributions with the same or newer library versions (Debian 12+, Linux Mint 21+, Fedora, Arch) should work as well — install the equivalent packages listed below.
 
 **Input:** offline capture files with an Ethernet link layer (`DLT_EN10MB`) — what `tcpdump -w` and Wireshark produce on a normal Ethernet or Wi-Fi interface. Only IPv4/TCP packets are analyzed; everything else (IPv6, UDP, ARP, …) is skipped. Live capture from a network interface is not supported.
+
+## Download
+
+Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/TCP-IP_Analyzed/releases/latest). Boost, jsoncpp and libpcap are built into the binary; it only needs glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+) and `libdbus`, which every mainstream distribution ships.
+
+```bash
+tar -xzf tcp-ip-analyzed-<version>-linux-x86_64.tar.gz
+cd tcp-ip-analyzed-<version>-linux-x86_64
+./TCP_Analysis --version
+python3 gui/tcp_analyzer_gui.py   # needs Tkinter, see below
+```
+
+To build from source instead, read on.
 
 ## Requirements
 
@@ -107,16 +122,16 @@ Each row is one TCP session reported by the analyzer:
 | Column | Meaning |
 | --- | --- |
 | `#` | Order in which the analyzer reported the session |
-| Source / Destination | `IP:port` of the two endpoints |
+| Source / Destination | `IP:port` of the endpoint that opened the connection, and of the one it connected to |
 | Start / End | Timestamps of the first and last packet of the session, taken from the capture (local time, microsecond precision) |
 | Duration, s | End − Start |
-| Closed by | `FIN/RST` — closed normally; `timeout` — idle longer than the timeout. Timed-out rows are highlighted in orange |
+| Closed by | `FIN` — both sides sent FIN; `RST` — reset; `timeout` — idle longer than the timeout (orange); `still open` — no FIN/RST and not idle long enough when the capture ended (blue) |
 
-The status bar shows the run state and the number of sessions, timed-out sessions and rows currently shown. Everything the analyzer writes besides session JSON (its header lines, errors on `stderr`, the exit code) goes to the **Log** pane.
+The status bar shows the run state and the number of sessions, timed-out sessions, sessions still open at the end, and rows currently shown. Everything the analyzer writes besides session JSON (its header lines, errors on `stderr`, the exit code) goes to the **Log** pane.
 
 ### Filtering
 
-Type into **Filter** to show only rows where any column contains the text — an IP address, a port (`:443`), a date, or `timeout` to see just the sessions that timed out:
+Type into **Filter** to show only rows where any column contains the text — an IP address, a port (`:443`), a date, `RST`, or `timeout` to see just the sessions that timed out:
 
 ![Filtering for timed-out sessions](docs/screenshots/03-filter.png)
 
@@ -153,9 +168,10 @@ Or point it at a directory and it will pick up every `.pcap` file in it:
 | --- | --- | --- |
 | `-i`, `--input <files...>` | One or more input `.pcap` files | — |
 | `-d`, `--dir <path>` | Directory to scan for `.pcap` files | — |
-| `-t`, `--timeout <seconds>` | Idle time after which an open session is force-closed and reported | `600` |
+| `-t`, `--timeout <seconds>` | Idle time (in capture time) after which an open session is force-closed and reported | `600` |
 | `-j`, `--threads <n>` | Number of worker threads used to process sessions in parallel | number of CPU cores |
 | `-q`, `--queue-size <n>` | Size of the internal packet queues (currently not used, see below) | `2048` |
+| `-v`, `--version` | Show the version | — |
 | `-h`, `--help` | Show usage information | — |
 
 `--input`/`-i` and `--dir`/`-d` can be combined; at least one input file must be found or the tool exits with an error.
@@ -168,15 +184,20 @@ Before the sessions, the analyzer prints a few plain-text header lines (`Analyzi
 
 ## Output format
 
-Each completed session is printed to `stdout` as a single-line JSON object:
+Each session is printed to `stdout` as a single-line JSON object:
 
 ```json
-{"source":{"ip":"192.168.1.10","port":54321},"destination":{"ip":"93.184.216.34","port":443},"start_time":{"seconds":1717000000,"microseconds":123456},"end_time":{"seconds":1717000042,"microseconds":654321},"timeout":false}
+{"source":{"ip":"192.168.1.10","port":54321},"destination":{"ip":"93.184.216.34","port":443},"start_time":{"seconds":1717000000,"microseconds":123456},"end_time":{"seconds":1717000042,"microseconds":654321}, "timeout":false,"closed_by":"fin"}
 ```
 
-- `source` / `destination` — the two endpoints of the session (see [Known limitations](#known-limitations) for which one ends up as `source`)
+- `source` — the endpoint that opened the connection: the sender of the session's first packet, or its receiver if that first packet is a SYN-ACK (the capture started mid-handshake). `destination` is the other endpoint.
 - `start_time` / `end_time` — Unix timestamps of the first and last packet seen for the session, from the capture itself (not wall-clock time)
-- `timeout` — `true` if the session was closed because it exceeded `--timeout` with no FIN/RST seen, `false` if it closed normally (RST, or FIN from both sides)
+- `closed_by` — how the session ended:
+  - `fin` — FIN seen from both sides;
+  - `rst` — a RST was seen;
+  - `timeout` — no packets for longer than `--timeout` seconds of capture time;
+  - `end_of_capture` — the input ended while the session was still open and not yet idle for `--timeout`.
+- `timeout` — `true` exactly when `closed_by` is `timeout` (kept for compatibility with 0.1.0)
 
 ## How it works
 
@@ -186,7 +207,9 @@ Each completed session is printed to `stdout` as a single-line JSON object:
 4. **Session tracking** – each worker keeps a hash map of open sessions and updates the start/end time on every packet. A session is closed and handed off for output when:
    - a **RST** is seen, or
    - **FIN** has been seen in both directions, or
-   - it has been idle longer than `--timeout` seconds (checked every 1000 packets).
+   - it has been idle longer than `--timeout` seconds. Idle time is measured in capture time — against the timestamp of the packet being read, not the computer's clock — so old captures are handled correctly. The check runs every 1000 packets and once more at the end of the input.
+
+   Sessions left open when the input ends are reported too, with `closed_by: "end_of_capture"`.
 5. **Output** – a dedicated output thread drains completed sessions from a lock-free queue and prints one JSON object per line to `stdout`, so results can be consumed while analysis is still running.
 
 The GUI is a thin wrapper: it starts `TCP_Analysis -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
@@ -200,12 +223,18 @@ The GUI is a thin wrapper: it starts `TCP_Analysis -t <timeout> -j <threads> -i 
 | `TCP_IP_Header.h` | Packed Ethernet / IPv4 / TCP header structs and flag constants |
 | `CMakeLists.txt` | Build configuration |
 | `gui/tcp_analyzer_gui.py` | Tkinter GUI |
+| `tests/test_sessions.py` | End-to-end test with a synthetic capture |
 | `docs/screenshots/` | Screenshots used in this README |
+
+## Tests
+
+`tests/test_sessions.py` writes a synthetic capture with known sessions (normal close with the final ACK, reset with trailing packets, port reuse, capture starting mid-handshake, a real timeout, a session still open at the end, and 300 background sessions, all dated years in the past) and checks every session the analyzer reports, with 1 and 4 worker threads:
+
+```bash
+python3 tests/test_sessions.py build/TCP_Analysis
+```
 
 ## Known limitations
 
-- **Timeouts are measured against the current time, not the capture's time.** The idle check compares each session's last packet with the computer's clock. On a capture recorded more than `--timeout` seconds ago, every session that is still open when a check runs is reported as timed out (and its remaining packets start a new session). Until this is fixed, analyze old captures with a `--timeout` larger than their age.
-- **`source` is not always the initiator.** A session closed by FIN/RST is reported with the direction of the packet that closed it, so `source` is often the server (e.g. `93.184.216.34:443 → 192.168.1.10:54321`). Timed-out sessions keep the direction of their first packet.
-- **Sessions still open at the end of the input are not reported.** Only sessions closed by FIN/RST or the timeout check appear in the output.
 - Only Ethernet-framed IPv4/TCP is analyzed; IPv6, VLAN-tagged frames and other link layers are skipped. `--dir` and the GUI's **Add folder…** pick up only `.pcap` files (not `.pcapng`).
 - The `-q`/`--queue-size` option is parsed but not yet wired into `SessionAnalyzer`'s internal queue sizes.
