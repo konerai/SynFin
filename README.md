@@ -98,22 +98,26 @@ This produces the `TCP_Analysis` binary in `build/`.
 
 ## Graphical interface
 
-`gui/tcp_analyzer_gui.py` is a desktop front end for the analyzer. Build the analyzer first (see above), then from the project root:
+`gui/tcp_analyzer_gui.py` is a dark-themed desktop front end for the analyzer. Build the analyzer first (see above), then from the project root:
 
 ```bash
 python3 gui/tcp_analyzer_gui.py
 ```
 
-The GUI looks for the binary at `build/TCP_Analysis` (then `./TCP_Analysis`, then `TCP_Analysis` on `PATH`); another location can be chosen with **Browse…**.
+The GUI looks for the binary at `build/TCP_Analysis` (then `./TCP_Analysis`, then `TCP_Analysis` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
 
 ![Main window before an analysis](docs/screenshots/01-start.png)
 
 ### Workflow
 
-1. **Add captures** — **Add files…** picks one or more `.pcap` files, **Add folder…** adds every `.pcap` file in a directory. **Remove** deletes the selected entries, **Clear** empties the list.
-2. **Set options** — **Timeout, s** is the idle time after which an unfinished session is reported as timed out (`--timeout`); **Threads** is the number of worker threads (`--threads`, defaults to the number of CPU cores).
-3. **Analyze** — runs `TCP_Analysis` on all listed files. Sessions appear in the table while the analyzer is still running; **Stop** terminates it early.
+1. **Captures** — **Add files…** picks one or more `.pcap` files, **Add folder…** adds every `.pcap` file in a directory. **Remove** (or the <kbd>Delete</kbd> key) deletes the selected entries, **Clear** empties the list.
+2. **Settings** — **Timeout, s** is the idle time after which an unfinished session is reported as timed out (`--timeout`); **Threads** is the number of worker threads (`--threads`, defaults to the number of CPU cores).
+3. **Analyze** — runs `TCP_Analysis` on all listed files. A progress bar runs while it works and sessions appear in the table as they are reported; **Stop** terminates it early.
 4. **Explore and export** the results (see below).
+
+### Summary tiles
+
+The row of tiles above the table counts the sessions by how they ended: **FIN** (both sides sent FIN), **RST** (reset), **Timeout** (idle longer than the timeout) and **Still open** (no FIN/RST, not idle long enough when the capture ended). Click a tile to show only those sessions, click it again (or **Sessions**) to show all.
 
 ### Results table
 
@@ -121,23 +125,23 @@ Each row is one TCP session reported by the analyzer:
 
 | Column | Meaning |
 | --- | --- |
+| Closed by | How the session ended, with the tile's color: FIN, RST, Timeout or Still open |
 | `#` | Order in which the analyzer reported the session |
 | Source / Destination | `IP:port` of the endpoint that opened the connection, and of the one it connected to |
-| Start / End | Timestamps of the first and last packet of the session, taken from the capture (local time, microsecond precision) |
+| Start / End | Timestamps of the first and last packet of the session, taken from the capture (local time; the table shows milliseconds, exports keep microseconds) |
 | Duration, s | End − Start |
-| Closed by | `FIN` — both sides sent FIN; `RST` — reset; `timeout` — idle longer than the timeout (orange); `still open` — no FIN/RST and not idle long enough when the capture ended (blue) |
 
-The status bar shows the run state and the number of sessions, timed-out sessions, sessions still open at the end, and rows currently shown. Everything the analyzer writes besides session JSON (its header lines, errors on `stderr`, the exit code) goes to the **Log** pane.
+The status bar at the bottom shows whether the analyzer is running (with the elapsed time) or how long the last run took. Everything the analyzer writes besides session JSON (its header lines, errors on `stderr`, the exit code) goes to the **Log** pane.
 
 ### Filtering
 
-Type into **Filter** to show only rows where any column contains the text — an IP address, a port (`:443`), a date, `RST`, or `timeout` to see just the sessions that timed out:
+Click a summary tile to filter by status, and/or type into the search box to show only rows where any column contains the text — an IP address, a port (`:443`), a date, or a status:
 
 ![Filtering for timed-out sessions](docs/screenshots/03-filter.png)
 
 ### Sorting
 
-Click a column header to sort by it, click again to reverse the order. Numeric columns (`#`, Duration) sort by value — for example, the longest sessions first:
+Click a column header to sort by it, click again to reverse the order; an arrow marks the sorted column. Numeric columns (`#`, Duration) sort by value — for example, the longest sessions first:
 
 ![Sessions sorted by duration](docs/screenshots/04-sorted.png)
 
@@ -145,7 +149,7 @@ Click a column header to sort by it, click again to reverse the order. Numeric c
 
 **Export…** saves all sessions from the last run (regardless of the filter):
 
-- **CSV** (`.csv`) — the same columns as the table, ready for a spreadsheet;
+- **CSV** (`.csv`) — the table's columns, with microsecond timestamps, ready for a spreadsheet;
 - **JSON Lines** (`.jsonl`) — the analyzer's original JSON objects, one per line.
 
 ## Command-line usage

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simple Tkinter GUI for the TCP_Analysis command-line tool.
+"""TCP Session Analyzer: a desktop GUI for the TCP_Analysis command-line tool.
 
 Runs the TCP_Analysis binary on the chosen .pcap files and shows every
 reported TCP session in a table. Needs only Python 3 with Tkinter
@@ -13,7 +13,9 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
@@ -25,22 +27,43 @@ BINARY_CANDIDATES = [
 PCAP_EXTENSIONS = (".pcap",)
 ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
 
-CLOSED_BY_LABELS = {
-    "fin": "FIN",
-    "rst": "RST",
-    "timeout": "timeout",
-    "end_of_capture": "still open",
-}
+# Dark palette
+BG = "#0d1117"
+SURFACE = "#161b22"
+RAISED = "#1f2630"
+HOVER = "#262d38"
+BORDER = "#30363d"
+BORDER_HI = "#484f58"
+TEXT = "#e6edf3"
+MUTED = "#8b949e"
+FAINT = "#6e7681"
+ACCENT = "#2f81f7"
+ACCENT_HI = "#4493f8"
+ACCENT_LO = "#1f6feb"
+ROW_ALT = "#1a2029"
+SELECT = "#1c3a63"
 
+# How a session ended: key from the analyzer's "closed_by" -> (label, color)
+STATUSES = {
+    "fin": ("FIN", "#3fb950"),
+    "rst": ("RST", "#f85149"),
+    "timeout": ("Timeout", "#d29922"),
+    "end_of_capture": ("Still open", "#a371f7"),
+}
+LEGACY_CLOSED = ("FIN/RST", TEXT)  # analyzers older than 0.2.0 don't tell FIN and RST apart
+
+# The status is shown in the tree column (#0) so it can carry a colored dot.
+STATUS_COLUMN = ("#0", "Closed by", 110)
 COLUMNS = [
-    ("num", "#", 60),
-    ("src", "Source", 160),
-    ("dst", "Destination", 160),
-    ("start", "Start", 225),
-    ("end", "End", 225),
-    ("duration", "Duration, s", 100),
-    ("status", "Closed by", 90),
+    # key, title, width, stretch
+    ("num", "#", 46, False),
+    ("src", "Source", 140, True),
+    ("dst", "Destination", 140, True),
+    ("start", "Start", 194, False),
+    ("end", "End", 194, False),
+    ("duration", "Duration, s", 104, False),
 ]
+EXPORT_HEADER = [title for _, title, _, _ in COLUMNS] + [STATUS_COLUMN[1]]
 
 
 def find_default_binary():
@@ -50,35 +73,69 @@ def find_default_binary():
     return shutil.which("TCP_Analysis") or BINARY_CANDIDATES[0]
 
 
-def closed_by(session):
+def status_key(session):
     reason = session.get("closed_by")
-    if reason is None:  # analyzer older than 0.2.0
-        return "timeout" if session.get("timeout") else "FIN/RST"
-    return CLOSED_BY_LABELS.get(reason, reason)
+    if reason is None:
+        return "timeout" if session.get("timeout") else "closed"
+    return reason
 
 
-def format_ts(ts):
-    seconds = ts["seconds"] + ts["microseconds"] / 1_000_000
-    return datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M:%S.%f")
+def status_label(key):
+    return STATUSES.get(key, LEGACY_CLOSED)[0]
 
 
 def to_seconds(ts):
     return ts["seconds"] + ts["microseconds"] / 1_000_000
 
 
+def format_ts(ts, precise):
+    text = datetime.fromtimestamp(to_seconds(ts)).strftime("%Y-%m-%d %H:%M:%S.%f")
+    return text if precise else text[:-3]
+
+
+def make_dot(color, diameter=9, width=20):
+    """A colored circle on a transparent image, padded on the right to space it from the text."""
+    image = tk.PhotoImage(width=width, height=diameter)
+    r = diameter / 2
+    for y in range(diameter):
+        for x in range(diameter):
+            if (x + 0.5 - r) ** 2 + (y + 0.5 - r) ** 2 <= r * r:
+                image.put(color, (x, y))
+    return image
+
+
+def pick_family(root, candidates, fallback_font):
+    available = set(tkfont.families(root))
+    for name in candidates:
+        if name in available:
+            return name
+    return tkfont.nametofont(fallback_font).actual("family")
+
+
+def shorten_home(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+
 class AnalyzerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("TCP Session Analyzer")
-        self.root.geometry("1100x700")
-        self.root.minsize(800, 500)
+        self.root.geometry("1360x840")
+        self.root.minsize(1100, 680)
+        self.root.configure(bg=BG)
 
         self.process = None
         self.events = queue.Queue()
+        self.files = []
         self.sessions = []  # raw JSON objects, in the order they arrived
-        self.timeouts = 0
-        self.still_open = 0
+        self.counts = {}
         self.finished = False
+        self.exit_code = None
+        self.started_at = None
+        self.elapsed = 0.0
+        self.status_filter = None
+        self.sort_state = None  # (column, descending)
 
         self.binary_var = tk.StringVar(value=find_default_binary())
         self.timeout_var = tk.IntVar(value=600)
@@ -86,94 +143,315 @@ class AnalyzerApp:
         self.filter_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
 
+        self._init_fonts()
+        self._init_styles()
         self._build_ui()
+        self._reset_counts()
+        self._refresh_files()
+        self._check_binary()
+
         self.filter_var.trace_add("write", lambda *_: self._apply_filter())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._drain_events)
 
+    # ---------- look ----------
+
+    def _init_fonts(self):
+        ui = pick_family(self.root, ["Inter", "Ubuntu", "Cantarell", "Noto Sans", "DejaVu Sans"], "TkDefaultFont")
+        mono = pick_family(self.root, ["JetBrains Mono", "Ubuntu Mono", "Noto Sans Mono", "DejaVu Sans Mono"],
+                           "TkFixedFont")
+        self.f_base = (ui, 10)
+        self.f_small = (ui, 9)
+        self.f_label = (ui, 8, "bold")
+        self.f_bold = (ui, 10, "bold")
+        self.f_h2 = (ui, 11, "bold")
+        self.f_title = (ui, 17, "bold")
+        self.f_stat = (ui, 22, "bold")
+        self.f_mono = (mono, 9)
+
+    def _init_styles(self):
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+
+        style.configure(".", background=SURFACE, foreground=TEXT, font=self.f_base,
+                        bordercolor=BORDER, lightcolor=SURFACE, darkcolor=SURFACE,
+                        troughcolor=SURFACE, fieldbackground=RAISED,
+                        selectbackground=SELECT, selectforeground=TEXT, insertcolor=TEXT)
+
+        # Buttons
+        style.configure("TButton", background=RAISED, foreground=TEXT, bordercolor=BORDER,
+                        lightcolor=RAISED, darkcolor=RAISED, focuscolor=RAISED,
+                        padding=(12, 6), relief="flat")
+        style.map("TButton",
+                  background=[("disabled", SURFACE), ("pressed", BORDER), ("active", HOVER)],
+                  lightcolor=[("disabled", SURFACE), ("pressed", BORDER), ("active", HOVER)],
+                  darkcolor=[("disabled", SURFACE), ("pressed", BORDER), ("active", HOVER)],
+                  focuscolor=[("active", HOVER)],
+                  bordercolor=[("active", BORDER_HI)],
+                  foreground=[("disabled", FAINT)])
+        style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff", bordercolor=ACCENT,
+                        lightcolor=ACCENT, darkcolor=ACCENT, focuscolor=ACCENT,
+                        font=self.f_bold, padding=(16, 9))
+        style.map("Accent.TButton",
+                  background=[("disabled", RAISED), ("pressed", ACCENT_LO), ("active", ACCENT_HI)],
+                  lightcolor=[("disabled", RAISED), ("pressed", ACCENT_LO), ("active", ACCENT_HI)],
+                  darkcolor=[("disabled", RAISED), ("pressed", ACCENT_LO), ("active", ACCENT_HI)],
+                  focuscolor=[("disabled", RAISED), ("active", ACCENT_HI)],
+                  bordercolor=[("disabled", BORDER), ("active", ACCENT_HI)],
+                  foreground=[("disabled", FAINT)])
+        rst = STATUSES["rst"][1]
+        style.configure("Stop.TButton", foreground=rst, font=self.f_bold, padding=(16, 9))
+        style.map("Stop.TButton", foreground=[("disabled", FAINT)],
+                  bordercolor=[("disabled", BORDER), ("active", rst)])
+
+        # Inputs
+        for name in ("TEntry", "TSpinbox"):
+            style.configure(name, fieldbackground=RAISED, foreground=TEXT, bordercolor=BORDER,
+                            lightcolor=RAISED, darkcolor=RAISED, background=RAISED,
+                            arrowcolor=MUTED, padding=(8, 6), insertwidth=1)
+            style.map(name, bordercolor=[("focus", ACCENT)], lightcolor=[("focus", RAISED)],
+                      arrowcolor=[("active", TEXT)], background=[("active", HOVER)])
+
+        # Table
+        style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE, foreground=TEXT,
+                        bordercolor=SURFACE, lightcolor=SURFACE, darkcolor=SURFACE,
+                        rowheight=28, font=self.f_base)
+        style.map("Treeview", background=[("selected", SELECT)], foreground=[("selected", TEXT)])
+        style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        style.layout("Treeview.Item", [("Treeitem.padding", {"sticky": "nswe", "children": [
+            ("Treeitem.image", {"side": "left", "sticky": ""}),
+            ("Treeitem.text", {"side": "left", "sticky": ""}),
+        ]})])
+        style.configure("Treeview", indent=0)
+        style.configure("Treeview.Heading", background=RAISED, foreground=MUTED, font=self.f_label,
+                        bordercolor=BORDER, lightcolor=RAISED, darkcolor=RAISED,
+                        relief="flat", padding=(8, 7))
+        style.map("Treeview.Heading", background=[("active", HOVER)], foreground=[("active", TEXT)])
+
+        # Thin scrollbars without arrows
+        for orient in ("Vertical", "Horizontal"):
+            name = f"{orient}.TScrollbar"
+            style.layout(name, [(f"{orient}.Scrollbar.trough", {
+                "sticky": "ns" if orient == "Vertical" else "ew",
+                "children": [(f"{orient}.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})],
+            })])
+            style.configure(name, background=BORDER, troughcolor=SURFACE, bordercolor=SURFACE,
+                            lightcolor=BORDER, darkcolor=BORDER, gripcount=0, arrowsize=10)
+            style.map(name, background=[("active", BORDER_HI)],
+                      lightcolor=[("active", BORDER_HI)], darkcolor=[("active", BORDER_HI)])
+
+        style.configure("Accent.Horizontal.TProgressbar", background=ACCENT, troughcolor=RAISED,
+                        bordercolor=RAISED, lightcolor=ACCENT, darkcolor=ACCENT, thickness=4)
+        style.configure("TPanedwindow", background=BG)
+        style.configure("Sash", background=BG, lightcolor=BG, darkcolor=BG, bordercolor=BG,
+                        sashthickness=12, gripcount=0)
+
+    def _card(self, parent, title=None):
+        outer = tk.Frame(parent, bg=SURFACE, highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=BORDER)
+        header = None
+        if title:
+            header = tk.Frame(outer, bg=SURFACE)
+            header.pack(fill=tk.X, padx=16, pady=(14, 10))
+            tk.Label(header, text=title, font=self.f_h2, bg=SURFACE, fg=TEXT).pack(side=tk.LEFT)
+        body = tk.Frame(outer, bg=SURFACE)
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0 if title else 14, 16))
+        return outer, header, body
+
+    def _field_label(self, parent, text):
+        return tk.Label(parent, text=text.upper(), font=self.f_label, bg=SURFACE, fg=MUTED, anchor="w")
+
     # ---------- layout ----------
 
     def _build_ui(self):
-        top = ttk.Frame(self.root, padding=8)
-        top.pack(fill=tk.X)
+        # Header
+        header = tk.Frame(self.root, bg=BG)
+        header.pack(fill=tk.X, padx=24, pady=(18, 14))
+        titles = tk.Frame(header, bg=BG)
+        titles.pack(side=tk.LEFT)
+        tk.Label(titles, text="TCP Session Analyzer", font=self.f_title, bg=BG, fg=TEXT).pack(anchor="w")
+        tk.Label(titles, text="Reconstruct TCP sessions from .pcap captures", font=self.f_base,
+                 bg=BG, fg=MUTED).pack(anchor="w")
+        self.version_pill = tk.Label(header, font=self.f_small, bg=RAISED, fg=MUTED, padx=12, pady=5,
+                                     highlightthickness=1, highlightbackground=BORDER)
+        self.version_pill.pack(side=tk.RIGHT, anchor="center")
 
-        # Binary
-        ttk.Label(top, text="TCP_Analysis binary:").grid(row=0, column=0, sticky=tk.W)
-        ttk.Entry(top, textvariable=self.binary_var).grid(row=0, column=1, sticky=tk.EW, padx=4)
-        ttk.Button(top, text="Browse…", command=self._choose_binary).grid(row=0, column=2)
-        top.columnconfigure(1, weight=1)
+        # Status bar (packed before the body so it keeps its place when the window shrinks)
+        footer = tk.Frame(self.root, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        footer.pack(side=tk.BOTTOM, fill=tk.X)
+        self.status_dot = tk.Label(footer, text="●", font=self.f_small, bg=SURFACE, fg=FAINT)
+        self.status_dot.pack(side=tk.LEFT, padx=(16, 6), pady=6)
+        tk.Label(footer, textvariable=self.status_var, font=self.f_small, bg=SURFACE, fg=MUTED).pack(side=tk.LEFT)
 
-        # Input files
-        files_frame = ttk.LabelFrame(self.root, text="Input .pcap files", padding=8)
-        files_frame.pack(fill=tk.X, padx=8)
+        body = tk.Frame(self.root, bg=BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 18))
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
 
-        self.files_list = tk.Listbox(files_frame, height=4, selectmode=tk.EXTENDED)
-        self.files_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sidebar = tk.Frame(body, bg=BG, width=310)
+        sidebar.grid(row=0, column=0, sticky="ns", padx=(0, 18))
+        sidebar.grid_propagate(False)
+        sidebar.pack_propagate(False)
+        self._build_sidebar(sidebar)
 
-        file_buttons = ttk.Frame(files_frame)
-        file_buttons.pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(file_buttons, text="Add files…", command=self._add_files).pack(fill=tk.X)
-        ttk.Button(file_buttons, text="Add folder…", command=self._add_folder).pack(fill=tk.X, pady=2)
-        ttk.Button(file_buttons, text="Remove", command=self._remove_files).pack(fill=tk.X)
-        ttk.Button(file_buttons, text="Clear", command=lambda: self.files_list.delete(0, tk.END)).pack(fill=tk.X, pady=2)
+        main = tk.Frame(body, bg=BG)
+        main.grid(row=0, column=1, sticky="nsew")
+        self._build_main(main)
 
-        # Options + run controls
-        options = ttk.Frame(self.root, padding=8)
-        options.pack(fill=tk.X)
-        ttk.Label(options, text="Timeout, s:").pack(side=tk.LEFT)
-        ttk.Spinbox(options, from_=1, to=86400, width=8, textvariable=self.timeout_var).pack(side=tk.LEFT, padx=(4, 12))
-        ttk.Label(options, text="Threads:").pack(side=tk.LEFT)
-        ttk.Spinbox(options, from_=1, to=256, width=5, textvariable=self.threads_var).pack(side=tk.LEFT, padx=(4, 12))
+    def _build_sidebar(self, sidebar):
+        # Captures
+        card, header, files = self._card(sidebar, "Captures")
+        card.pack(fill=tk.BOTH, expand=True)
+        self.files_badge = tk.Label(header, font=self.f_label, bg=RAISED, fg=MUTED, padx=8, pady=2)
+        self.files_badge.pack(side=tk.RIGHT)
 
-        self.run_button = ttk.Button(options, text="▶ Analyze", command=self._start)
-        self.run_button.pack(side=tk.LEFT)
-        self.stop_button = ttk.Button(options, text="■ Stop", command=self._stop, state=tk.DISABLED)
-        self.stop_button.pack(side=tk.LEFT, padx=4)
+        list_frame = tk.Frame(files, bg=RAISED, highlightthickness=1, highlightbackground=BORDER)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        self.files_list = tk.Listbox(
+            list_frame, selectmode=tk.EXTENDED, activestyle="none", font=self.f_small,
+            bg=RAISED, fg=TEXT, selectbackground=SELECT, selectforeground=TEXT,
+            highlightthickness=0, borderwidth=0, relief=tk.FLAT,
+        )
+        self.files_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.files_list.bind("<Delete>", lambda _: self._remove_files())
+        self.files_empty = tk.Label(list_frame, text="No captures yet\nAdd .pcap files or a folder",
+                                    font=self.f_small, bg=RAISED, fg=FAINT, justify=tk.CENTER)
 
-        ttk.Button(options, text="Export…", command=self._export).pack(side=tk.RIGHT)
-        ttk.Entry(options, textvariable=self.filter_var, width=24).pack(side=tk.RIGHT, padx=4)
-        ttk.Label(options, text="Filter:").pack(side=tk.RIGHT)
+        buttons = tk.Frame(files, bg=SURFACE)
+        buttons.pack(fill=tk.X, pady=(10, 0))
+        buttons.columnconfigure((0, 1), weight=1, uniform="files")
+        ttk.Button(buttons, text="Add files…", command=self._add_files).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(buttons, text="Add folder…", command=self._add_folder).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        ttk.Button(buttons, text="Remove", command=self._remove_files).grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(8, 0))
+        ttk.Button(buttons, text="Clear", command=self._clear_files).grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(8, 0))
 
-        # Results table and log
-        panes = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
-        panes.pack(fill=tk.BOTH, expand=True, padx=8)
+        # Settings
+        card, _, settings = self._card(sidebar, "Settings")
+        card.pack(fill=tk.X, pady=(16, 0))
+        settings.columnconfigure((0, 1), weight=1, uniform="settings")
+        self._field_label(settings, "Timeout, s").grid(row=0, column=0, sticky="w")
+        self._field_label(settings, "Threads").grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Spinbox(settings, from_=1, to=86400, increment=60, textvariable=self.timeout_var,
+                    width=8).grid(row=1, column=0, sticky="ew", pady=(4, 12))
+        ttk.Spinbox(settings, from_=1, to=256, textvariable=self.threads_var,
+                    width=5).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 12))
+        self._field_label(settings, "Analyzer binary").grid(row=2, column=0, columnspan=2, sticky="w")
+        binary_row = tk.Frame(settings, bg=SURFACE)
+        binary_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        entry = ttk.Entry(binary_row, textvariable=self.binary_var)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        entry.bind("<FocusOut>", lambda _: self._check_binary())
+        entry.bind("<Return>", lambda _: self._check_binary())
+        ttk.Button(binary_row, text="…", width=3, command=self._choose_binary).pack(side=tk.LEFT, padx=(8, 0))
 
-        table_frame = ttk.Frame(panes)
-        self.table = ttk.Treeview(table_frame, columns=[c[0] for c in COLUMNS], show="headings")
-        for key, title, width in COLUMNS:
-            self.table.heading(key, text=title, command=lambda k=key: self._sort_by(k, False))
-            self.table.column(key, width=width, anchor=tk.W, stretch=key in ("src", "dst"))
-        self.table.tag_configure("timeout", foreground="#b35c00")
-        self.table.tag_configure("open", foreground="#2f6fb0")
+        # Run controls
+        actions = tk.Frame(sidebar, bg=BG)
+        actions.pack(fill=tk.X, pady=(16, 0))
+        actions.columnconfigure(0, weight=1)
+        self.run_button = ttk.Button(actions, text="▶  Analyze", style="Accent.TButton", command=self._start)
+        self.run_button.grid(row=0, column=0, sticky="ew")
+        self.stop_button = ttk.Button(actions, text="■  Stop", style="Stop.TButton", command=self._stop,
+                                      state=tk.DISABLED)
+        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.progress = ttk.Progressbar(actions, mode="indeterminate", style="Accent.Horizontal.TProgressbar")
+        self.progress.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.progress.grid_remove()
+
+    def _build_main(self, main):
+        # Stat tiles; clicking one filters the table by that status
+        tiles = tk.Frame(main, bg=BG)
+        tiles.pack(fill=tk.X)
+        self.tiles = {}
+        tile_specs = [(None, "Sessions", TEXT)] + [(key, label, color) for key, (label, color) in STATUSES.items()]
+        for index, (key, label, color) in enumerate(tile_specs):
+            tiles.columnconfigure(index, weight=1, uniform="tiles")
+            tile = tk.Frame(tiles, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER, cursor="hand2")
+            tile.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 12, 0))
+            caption = tk.Frame(tile, bg=SURFACE)
+            caption.pack(fill=tk.X, padx=16, pady=(14, 0))
+            if key:
+                tk.Label(caption, text="●", font=self.f_small, bg=SURFACE, fg=color).pack(side=tk.LEFT, padx=(0, 6))
+            tk.Label(caption, text=label.upper(), font=self.f_label, bg=SURFACE, fg=MUTED).pack(side=tk.LEFT)
+            value = tk.Label(tile, text="0", font=self.f_stat, bg=SURFACE, fg=color, anchor="w")
+            value.pack(fill=tk.X, padx=16, pady=(2, 12))
+            for widget in (tile, caption, value, *caption.winfo_children()):
+                widget.bind("<Button-1>", lambda _, k=key: self._toggle_status_filter(k))
+                widget.bind("<Enter>", lambda _, t=tile, k=key: self._hover_tile(t, k, True))
+                widget.bind("<Leave>", lambda _, t=tile, k=key: self._hover_tile(t, k, False))
+            self.tiles[key] = (tile, value, color)
+
+        panes = ttk.PanedWindow(main, orient=tk.VERTICAL)
+        panes.pack(fill=tk.BOTH, expand=True, pady=(16, 0))
+
+        # Results
+        card, header, results = self._card(panes, "Sessions")
+        self.shown_label = tk.Label(header, font=self.f_small, bg=SURFACE, fg=MUTED)
+        self.shown_label.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(header, text="Export…", command=self._export).pack(side=tk.RIGHT)
+        search = ttk.Entry(header, textvariable=self.filter_var, width=34)
+        search.pack(side=tk.RIGHT, padx=(0, 8))
+        hint = tk.Label(search, text="Filter by IP, port, date or status", font=self.f_small,
+                        bg=RAISED, fg=FAINT, cursor="xterm")
+        hint.bind("<Button-1>", lambda _: search.focus_set())
+
+        def update_hint(*_):
+            if self.filter_var.get() or self.root.focus_get() is search:
+                hint.place_forget()
+            else:
+                hint.place(x=9, rely=0.5, anchor="w")
+
+        search.bind("<FocusIn>", update_hint, add="+")
+        search.bind("<FocusOut>", update_hint, add="+")
+        self.filter_var.trace_add("write", update_hint)
+        update_hint()
+
+        table_frame = tk.Frame(results, bg=SURFACE, highlightthickness=1, highlightbackground=BORDER)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+        self.table = ttk.Treeview(table_frame, columns=[c[0] for c in COLUMNS], show=("tree", "headings"))
+        key, title, width = STATUS_COLUMN
+        self.table.heading(key, text=title.upper(), anchor=tk.W, command=lambda: self._sort_by("#0"))
+        self.table.column(key, width=width, minwidth=width, anchor=tk.W, stretch=False)
+        for key, title, width, stretch in COLUMNS:
+            self.table.heading(key, text=title.upper(), anchor=tk.W, command=lambda k=key: self._sort_by(k))
+            self.table.column(key, width=width, minwidth=48, anchor=tk.W, stretch=stretch)
+        self.dots = {key: make_dot(color) for key, (_, color) in STATUSES.items()}
+        self.dots["closed"] = make_dot(MUTED)
+        self.table.tag_configure("odd", background=ROW_ALT)
         yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table.yview)
         self.table.configure(yscrollcommand=yscroll.set)
         self.table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
-        panes.add(table_frame, weight=4)
+        panes.add(card, weight=5)
 
-        log_frame = ttk.LabelFrame(panes, text="Log", padding=4)
-        self.log = tk.Text(log_frame, height=6, state=tk.DISABLED, wrap=tk.WORD)
+        # Log
+        card, _, log_body = self._card(panes, "Log")
+        self.log = tk.Text(log_body, height=5, wrap=tk.WORD, font=self.f_mono, bg=SURFACE, fg=MUTED,
+                           insertbackground=TEXT, relief=tk.FLAT, highlightthickness=0, borderwidth=0,
+                           state=tk.DISABLED)
+        self.log.tag_configure("cmd", foreground=ACCENT_HI)
+        self.log.tag_configure("err", foreground=STATUSES["rst"][1])
+        self.log.tag_configure("ok", foreground=STATUSES["fin"][1])
         self.log.pack(fill=tk.BOTH, expand=True)
-        panes.add(log_frame, weight=1)
+        panes.add(card, weight=1)
 
-        ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W, padding=(8, 2)).pack(fill=tk.X, side=tk.BOTTOM)
+    # ---------- files ----------
 
-    # ---------- file selection ----------
-
-    def _choose_binary(self):
-        path = filedialog.askopenfilename(title="Select TCP_Analysis binary", initialdir=PROJECT_DIR)
-        if path:
-            self.binary_var.set(path)
-
-    def _current_files(self):
-        return list(self.files_list.get(0, tk.END))
+    def _refresh_files(self):
+        self.files_list.delete(0, tk.END)
+        for path in self.files:
+            self.files_list.insert(tk.END, f"{os.path.basename(path)}   ·   {shorten_home(os.path.dirname(path))}")
+        count = len(self.files)
+        self.files_badge.configure(text=f"{count} FILE{'' if count == 1 else 'S'}")
+        if self.files:
+            self.files_empty.place_forget()
+        else:
+            self.files_empty.place(relx=0.5, rely=0.5, anchor="center")
 
     def _add_paths(self, paths):
-        existing = set(self._current_files())
         for path in paths:
-            if path not in existing:
-                self.files_list.insert(tk.END, path)
-                existing.add(path)
+            if path not in self.files:
+                self.files.append(path)
+        self._refresh_files()
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(
@@ -197,34 +475,60 @@ class AnalyzerApp:
 
     def _remove_files(self):
         for index in reversed(self.files_list.curselection()):
-            self.files_list.delete(index)
+            del self.files[index]
+        self._refresh_files()
+
+    def _clear_files(self):
+        self.files.clear()
+        self._refresh_files()
+
+    # ---------- analyzer binary ----------
+
+    def _choose_binary(self):
+        path = filedialog.askopenfilename(title="Select TCP_Analysis binary", initialdir=PROJECT_DIR)
+        if path:
+            self.binary_var.set(path)
+            self._check_binary()
+
+    def _check_binary(self):
+        binary = self.binary_var.get().strip()
+        if not (os.path.isfile(binary) and os.access(binary, os.X_OK)):
+            self.version_pill.configure(text="●  Analyzer not found", fg=STATUSES["rst"][1])
+            return
+        text = "Analyzer ready"
+        try:
+            out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=3)
+            if out.returncode == 0 and out.stdout.startswith("TCP_Analysis"):
+                text = "Analyzer " + out.stdout.split()[-1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.version_pill.configure(text=f"●  {text}", fg=STATUSES["fin"][1])
 
     # ---------- running the analyzer ----------
 
     def _start(self):
         binary = self.binary_var.get().strip()
-        files = self._current_files()
         if not os.path.isfile(binary) or not os.access(binary, os.X_OK):
-            messagebox.showerror("Binary not found", f"Cannot run {binary!r}.\nBuild the project first (see README).")
+            messagebox.showerror("Analyzer not found", f"Cannot run {binary!r}.\nBuild the project first (see README).")
             return
-        if not files:
-            messagebox.showerror("No input", "Add at least one .pcap file.")
+        if not self.files:
+            messagebox.showerror("No captures", "Add at least one .pcap file.")
             return
         try:
             timeout = int(self.timeout_var.get())
             threads = int(self.threads_var.get())
         except (tk.TclError, ValueError):
-            messagebox.showerror("Bad options", "Timeout and threads must be whole numbers.")
+            messagebox.showerror("Bad settings", "Timeout and threads must be whole numbers.")
             return
 
-        cmd = [binary, "-t", str(timeout), "-j", str(threads), "-i", *files]
+        cmd = [binary, "-t", str(timeout), "-j", str(threads), "-i", *self.files]
         # The analyzer writes "\n" without flushing, so line-buffer it when we can
         # to get rows while it is still running rather than all at the end.
         if shutil.which("stdbuf"):
             cmd = ["stdbuf", "-oL", *cmd]
 
         self._clear_results()
-        self._log("$ " + " ".join(cmd))
+        self._log("$ " + " ".join(cmd), "cmd")
         try:
             self.process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
@@ -234,9 +538,12 @@ class AnalyzerApp:
             self.process = None
             return
 
+        self.started_at = time.monotonic()
         self.run_button.configure(state=tk.DISABLED)
         self.stop_button.configure(state=tk.NORMAL)
-        self.status_var.set("Analyzing…")
+        self.progress.grid()
+        self.progress.start(12)
+        self._update_status()
         threading.Thread(target=self._read_stream, args=(self.process.stdout, "out"), daemon=True).start()
         threading.Thread(target=self._read_stream, args=(self.process.stderr, "err"), daemon=True).start()
         threading.Thread(target=self._wait_process, args=(self.process,), daemon=True).start()
@@ -252,7 +559,7 @@ class AnalyzerApp:
     def _stop(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
-            self._log("Stopped by user.")
+            self._log("Stopped by user.", "err")
 
     def _drain_events(self):
         handled = 0
@@ -263,14 +570,15 @@ class AnalyzerApp:
                 if kind == "out":
                     self._handle_output_line(payload)
                 elif kind == "err":
-                    self._log(payload)
+                    self._log(payload, "err")
                 elif kind == "exit":
                     self._finish(payload)
         except queue.Empty:
             pass
-        if handled:
+        if handled or self.process:
+            self._update_counts()
             self._update_status()
-        self.root.after(50 if handled else 100, self._drain_events)
+        self.root.after(50 if handled else 150, self._drain_events)
 
     def _handle_output_line(self, line):
         if not line.startswith("{"):
@@ -280,48 +588,53 @@ class AnalyzerApp:
         try:
             session = json.loads(line)
         except json.JSONDecodeError:
-            self._log("Unparsed: " + line)
+            self._log("Unparsed: " + line, "err")
             return
         self.sessions.append(session)
-        if session.get("timeout"):
-            self.timeouts += 1
-        elif session.get("closed_by") == "end_of_capture":
-            self.still_open += 1
+        key = status_key(session)
+        self.counts[key] = self.counts.get(key, 0) + 1
         if self._matches_filter(session):
             self._insert_row(len(self.sessions), session)
 
     def _finish(self, code):
         self.process = None
+        self.finished = True
+        self.elapsed = time.monotonic() - self.started_at
+        self.progress.stop()
+        self.progress.grid_remove()
         self.run_button.configure(state=tk.NORMAL)
         self.stop_button.configure(state=tk.DISABLED)
-        self.finished = True
-        self._log(f"Analyzer exited with code {code}.")
+        self._log(f"Analyzer exited with code {code}.", "ok" if code == 0 else "err")
+        self.exit_code = code
 
     # ---------- table ----------
 
     @staticmethod
-    def _row_values(num, s):
+    def _row_values(num, s, precise=False):
         start, end = s["start_time"], s["end_time"]
         return (
             num,
             f'{s["source"]["ip"]}:{s["source"]["port"]}',
             f'{s["destination"]["ip"]}:{s["destination"]["port"]}',
-            format_ts(start),
-            format_ts(end),
+            format_ts(start, precise),
+            format_ts(end, precise),
             f"{to_seconds(end) - to_seconds(start):.6f}",
-            closed_by(s),
+            status_label(status_key(s)),
         )
 
     def _insert_row(self, num, session):
-        if session.get("timeout"):
-            tags = ("timeout",)
-        elif session.get("closed_by") == "end_of_capture":
-            tags = ("open",)
-        else:
-            tags = ()
-        self.table.insert("", tk.END, values=self._row_values(num, session), tags=tags)
+        key = status_key(session)
+        values = self._row_values(num, session)
+        tags = ("odd",) if len(self.table.get_children()) % 2 else ()
+        self.table.insert("", tk.END, text=values[-1], image=self.dots[key], values=values[:-1], tags=tags)
+
+    def _restripe(self):
+        for index, item in enumerate(self.table.get_children()):
+            self.table.item(item, tags=("odd",) if index % 2 else ())
 
     def _matches_filter(self, session):
+        if self.status_filter and status_key(session) != self.status_filter:
+            return False
         needle = self.filter_var.get().strip().lower()
         if not needle:
             return True
@@ -332,10 +645,31 @@ class AnalyzerApp:
         for num, session in enumerate(self.sessions, start=1):
             if self._matches_filter(session):
                 self._insert_row(num, session)
+        if self.sort_state:
+            column, descending = self.sort_state
+            self._sort_by(column, descending)
         self._update_status()
 
-    def _sort_by(self, column, descending):
-        rows = [(self.table.set(item, column), item) for item in self.table.get_children("")]
+    def _toggle_status_filter(self, key):
+        self.status_filter = None if key is None or key == self.status_filter else key
+        for tile_key, (tile, _, color) in self.tiles.items():
+            selected = tile_key == self.status_filter and tile_key is not None
+            tile.configure(highlightbackground=color if selected else BORDER)
+        self._apply_filter()
+
+    def _hover_tile(self, tile, key, inside):
+        if key is not None and key == self.status_filter:
+            return
+        tile.configure(highlightbackground=BORDER_HI if inside else BORDER)
+
+    def _sort_by(self, column, descending=None):
+        if descending is None:
+            same = self.sort_state and self.sort_state[0] == column
+            descending = not self.sort_state[1] if same else False
+        if column == "#0":
+            rows = [(self.table.item(item, "text"), item) for item in self.table.get_children("")]
+        else:
+            rows = [(self.table.set(item, column), item) for item in self.table.get_children("")]
 
         def key(row):
             value = row[0]
@@ -347,30 +681,50 @@ class AnalyzerApp:
         rows.sort(key=key, reverse=descending)
         for index, (_, item) in enumerate(rows):
             self.table.move(item, "", index)
-        self.table.heading(column, command=lambda: self._sort_by(column, not descending))
+        self.sort_state = (column, descending)
+        for key_, title in [STATUS_COLUMN[:2]] + [(c[0], c[1]) for c in COLUMNS]:
+            arrow = (" ▼" if descending else " ▲") if key_ == column else ""
+            self.table.heading(key_, text=title.upper() + arrow)
+        self._restripe()
+
+    def _reset_counts(self):
+        self.counts = {}
+        self._update_counts()
 
     def _clear_results(self):
         self.sessions.clear()
-        self.timeouts = 0
-        self.still_open = 0
         self.finished = False
+        self.exit_code = None
+        self._reset_counts()
         self.table.delete(*self.table.get_children())
         self.log.configure(state=tk.NORMAL)
         self.log.delete("1.0", tk.END)
         self.log.configure(state=tk.DISABLED)
 
+    def _update_counts(self):
+        for key, (_, value, _) in self.tiles.items():
+            count = len(self.sessions) if key is None else self.counts.get(key, 0)
+            value.configure(text=f"{count:,}".replace(",", " "))
+
     def _update_status(self):
         shown = len(self.table.get_children())
         total = len(self.sessions)
-        state = "Analyzing…" if self.process else ("Done" if self.finished else "Ready")
-        self.status_var.set(
-            f"{state}   Sessions: {total}   Timed out: {self.timeouts}   "
-            f"Still open: {self.still_open}   Shown: {shown}"
-        )
+        self.shown_label.configure(text=f"showing {shown:,} of {total:,}".replace(",", " "))
+        if self.process:
+            elapsed = time.monotonic() - self.started_at
+            dot, text = ACCENT, f"Analyzing {len(self.files)} capture(s)…   {elapsed:.1f} s"
+        elif self.finished:
+            ok = self.exit_code == 0
+            dot = STATUSES["fin"][1] if ok else STATUSES["rst"][1]
+            text = f"{'Done' if ok else 'Analyzer failed'} in {self.elapsed:.1f} s   ·   {total:,} sessions".replace(",", " ")
+        else:
+            dot, text = FAINT, "Ready"
+        self.status_dot.configure(fg=dot)
+        self.status_var.set(text)
 
-    def _log(self, text):
+    def _log(self, text, tag=None):
         self.log.configure(state=tk.NORMAL)
-        self.log.insert(tk.END, text + "\n")
+        self.log.insert(tk.END, text + "\n", tag or ())
         self.log.see(tk.END)
         self.log.configure(state=tk.DISABLED)
 
@@ -394,13 +748,13 @@ class AnalyzerApp:
                         f.write(json.dumps(session) + "\n")
                 else:
                     writer = csv.writer(f)
-                    writer.writerow([title for _, title, _ in COLUMNS])
+                    writer.writerow(EXPORT_HEADER)
                     for num, session in enumerate(self.sessions, start=1):
-                        writer.writerow(self._row_values(num, session))
+                        writer.writerow(self._row_values(num, session, precise=True))
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc))
             return
-        self._log(f"Exported {len(self.sessions)} sessions to {path}")
+        self._log(f"Exported {len(self.sessions)} sessions to {path}", "ok")
 
     def _on_close(self):
         if self.process and self.process.poll() is None:
