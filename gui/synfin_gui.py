@@ -24,6 +24,8 @@ BINARY_CANDIDATES = [
     os.path.join(PROJECT_DIR, "build", "synfin"),
     os.path.join(PROJECT_DIR, "synfin"),
 ]
+ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 PCAP_EXTENSIONS = (".pcap",)
 ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
 
@@ -124,6 +126,7 @@ class AnalyzerApp:
         self.root.geometry("1360x840")
         self.root.minsize(1100, 680)
         self.root.configure(bg=BG)
+        self._set_window_icon()
 
         self.process = None
         self.events = queue.Queue()
@@ -155,6 +158,18 @@ class AnalyzerApp:
         self.root.after(100, self._drain_events)
 
     # ---------- look ----------
+
+    def _icon(self, size):
+        path = os.path.join(ICON_DIR, f"synfin-{size}.png")
+        try:
+            return tk.PhotoImage(file=path)
+        except tk.TclError:  # icons missing, e.g. the script was copied on its own
+            return None
+
+    def _set_window_icon(self):
+        self.icons = [icon for icon in map(self._icon, ICON_SIZES) if icon]
+        if self.icons:
+            self.root.iconphoto(True, *self.icons)
 
     def _init_fonts(self):
         ui = pick_family(self.root, ["Inter", "Ubuntu", "Cantarell", "Noto Sans", "DejaVu Sans"], "TkDefaultFont")
@@ -267,6 +282,9 @@ class AnalyzerApp:
         # Header
         header = tk.Frame(self.root, bg=BG)
         header.pack(fill=tk.X, padx=24, pady=(18, 14))
+        self.logo = self._icon(48)
+        if self.logo:
+            tk.Label(header, image=self.logo, bg=BG).pack(side=tk.LEFT, padx=(0, 12))
         titles = tk.Frame(header, bg=BG)
         titles.pack(side=tk.LEFT)
         tk.Label(titles, text="SynFin", font=self.f_title, bg=BG, fg=TEXT).pack(anchor="w")
@@ -763,7 +781,9 @@ class AnalyzerApp:
 
 
 def main():
-    root = tk.Tk()
+    # Tk turns the class name into the window's WM_CLASS "Synfin", which the desktop
+    # entry's StartupWMClass matches so docks show SynFin's icon for this window.
+    root = tk.Tk(className="synfin")
     AnalyzerApp(root)
     root.mainloop()
 
