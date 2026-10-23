@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(TcpPcapAnalyzer)
+project(SynFin LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -10,6 +10,6 @@ include_directories(${Boost_INCLUDE_DIRS})
 
 find_package(jsoncpp REQUIRED)
 
-add_executable(TCP_Analysis TCP_Analysis.cpp)
+add_executable(synfin synfin.cpp)
 
-target_link_libraries(TCP_Analysis ${Boost_LIBRARIES} pcap jsoncpp_lib)
+target_link_libraries(synfin ${Boost_LIBRARIES} pcap jsoncpp_lib)

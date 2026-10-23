@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""TCP Session Analyzer: a desktop GUI for the TCP_Analysis command-line tool.
+"""SynFin: a desktop GUI for the synfin TCP session analyzer.
 
-Runs the TCP_Analysis binary on the chosen .pcap files and shows every
+Runs the synfin binary on the chosen .pcap files and shows every
 reported TCP session in a table. Needs only Python 3 with Tkinter
 (Debian/Ubuntu: sudo apt-get install python3-tk).
 """
@@ -21,8 +21,8 @@ from tkinter import filedialog, messagebox, ttk
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BINARY_CANDIDATES = [
-    os.path.join(PROJECT_DIR, "build", "TCP_Analysis"),
-    os.path.join(PROJECT_DIR, "TCP_Analysis"),
+    os.path.join(PROJECT_DIR, "build", "synfin"),
+    os.path.join(PROJECT_DIR, "synfin"),
 ]
 PCAP_EXTENSIONS = (".pcap",)
 ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
@@ -70,7 +70,7 @@ def find_default_binary():
     for path in BINARY_CANDIDATES:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
-    return shutil.which("TCP_Analysis") or BINARY_CANDIDATES[0]
+    return shutil.which("synfin") or BINARY_CANDIDATES[0]
 
 
 def status_key(session):
@@ -120,7 +120,7 @@ def shorten_home(path):
 class AnalyzerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("TCP Session Analyzer")
+        self.root.title("SynFin — TCP Session Analyzer")
         self.root.geometry("1360x840")
         self.root.minsize(1100, 680)
         self.root.configure(bg=BG)
@@ -269,8 +269,8 @@ class AnalyzerApp:
         header.pack(fill=tk.X, padx=24, pady=(18, 14))
         titles = tk.Frame(header, bg=BG)
         titles.pack(side=tk.LEFT)
-        tk.Label(titles, text="TCP Session Analyzer", font=self.f_title, bg=BG, fg=TEXT).pack(anchor="w")
-        tk.Label(titles, text="Reconstruct TCP sessions from .pcap captures", font=self.f_base,
+        tk.Label(titles, text="SynFin", font=self.f_title, bg=BG, fg=TEXT).pack(anchor="w")
+        tk.Label(titles, text="TCP sessions from SYN to FIN, reconstructed from .pcap captures", font=self.f_base,
                  bg=BG, fg=MUTED).pack(anchor="w")
         self.version_pill = tk.Label(header, font=self.f_small, bg=RAISED, fg=MUTED, padx=12, pady=5,
                                      highlightthickness=1, highlightbackground=BORDER)
@@ -485,7 +485,7 @@ class AnalyzerApp:
     # ---------- analyzer binary ----------
 
     def _choose_binary(self):
-        path = filedialog.askopenfilename(title="Select TCP_Analysis binary", initialdir=PROJECT_DIR)
+        path = filedialog.askopenfilename(title="Select the synfin binary", initialdir=PROJECT_DIR)
         if path:
             self.binary_var.set(path)
             self._check_binary()
@@ -498,8 +498,8 @@ class AnalyzerApp:
         text = "Analyzer ready"
         try:
             out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=3)
-            if out.returncode == 0 and out.stdout.startswith("TCP_Analysis"):
-                text = "Analyzer " + out.stdout.split()[-1]
+            if out.returncode == 0 and out.stdout.startswith(("synfin", "TCP_Analysis")):
+                text = "synfin " + out.stdout.split()[-1]
         except (OSError, subprocess.SubprocessError):
             pass
         self.version_pill.configure(text=f"●  {text}", fg=STATUSES["fin"][1])

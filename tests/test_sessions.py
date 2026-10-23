@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end test for TCP_Analysis.
+"""End-to-end test for synfin.
 
 Writes a synthetic capture with known sessions, runs the analyzer on it and
 checks every reported session. Uses only the Python standard library.
 
-Usage: python3 tests/test_sessions.py [path/to/TCP_Analysis]
+Usage: python3 tests/test_sessions.py [path/to/synfin]
 """
 
 import json
@@ -151,7 +151,7 @@ def check(sessions, expected):
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    binary = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "build", "TCP_Analysis")
+    binary = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "build", "synfin")
     cap, expected = build_capture()
     failed = False
     with tempfile.TemporaryDirectory() as tmp:

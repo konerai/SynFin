@@ -1,5 +1,5 @@
-#ifndef SESSION_ANALYZED_H
-#define SESSION_ANALYZED_H
+#ifndef SESSION_ANALYZER_H
+#define SESSION_ANALYZER_H
 
 #include <pcap.h>
 #include <filesystem>
@@ -15,7 +15,7 @@
 #include <atomic>
 #include <endian.h>
 #include <vector>
-#include "TCP_IP_Header.h"
+#include "tcp_ip_headers.h"
 
 class SessionAnalyzer {
 public:
@@ -491,4 +491,4 @@ private:
     SessionKeyHash sessionKeyHasher;
 };
 
-#endif // SESSION_ANALYZED_H
+#endif // SESSION_ANALYZER_H
