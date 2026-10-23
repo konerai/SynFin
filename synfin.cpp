@@ -1,4 +1,4 @@
-#include "Session_Analyzed.h"
+#include "session_analyzer.h"
 #include <boost/program_options.hpp>
 #include <algorithm>
 #include <filesystem>
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (vm.count("version")) {
-        std::cout << "TCP_Analysis " << kVersion << std::endl;
+        std::cout << "synfin " << kVersion << std::endl;
         return 0;
     }
 

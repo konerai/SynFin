@@ -1,11 +1,13 @@
-# TCP-IP_Analyzed
+# SynFin
 
-A multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
+**TCP sessions from SYN to FIN.** SynFin is a multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
 
-- **`TCP_Analysis`** — the command-line analyzer; prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
-- **TCP Session Analyzer GUI** — a small desktop window (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table.
+- **`synfin`** — the command-line analyzer; prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
+- **SynFin GUI** — a dark-themed desktop window (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table.
 
-![TCP Session Analyzer GUI with analysis results](docs/screenshots/02-results.png)
+![SynFin GUI with analysis results](docs/screenshots/02-results.png)
+
+> SynFin was called *TCP-IP_Analyzed* before v0.3.0, and its binary was `TCP_Analysis`.
 
 It's built for offline analysis of large packet captures: instead of loading a whole capture into memory, it streams packets from libpcap, shards them across worker threads by session, and emits results as soon as each session ends.
 
@@ -40,13 +42,13 @@ Other distributions with the same or newer library versions (Debian 12+, Linux M
 
 ## Download
 
-Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/TCP-IP_Analyzed/releases/latest). Boost, jsoncpp and libpcap are built into the binary; it only needs glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+) and `libdbus`, which every mainstream distribution ships.
+Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/SynFin/releases/latest). Boost, jsoncpp and libpcap are built into the binary; it only needs glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+) and `libdbus`, which every mainstream distribution ships.
 
 ```bash
-tar -xzf tcp-ip-analyzed-<version>-linux-x86_64.tar.gz
-cd tcp-ip-analyzed-<version>-linux-x86_64
-./TCP_Analysis --version
-python3 gui/tcp_analyzer_gui.py   # needs Tkinter, see below
+tar -xzf synfin-<version>-linux-x86_64.tar.gz
+cd synfin-<version>-linux-x86_64
+./synfin --version
+python3 gui/synfin_gui.py   # needs Tkinter, see below
 ```
 
 To build from source instead, read on.
@@ -87,24 +89,24 @@ sudo pacman -S base-devel cmake libpcap boost jsoncpp tk
 ## Building
 
 ```bash
-git clone https://github.com/konerai/TCP-IP_Analyzed.git
-cd TCP-IP_Analyzed
+git clone https://github.com/konerai/SynFin.git
+cd SynFin
 mkdir build && cd build
 cmake ..
 make
 ```
 
-This produces the `TCP_Analysis` binary in `build/`.
+This produces the `synfin` binary in `build/`.
 
 ## Graphical interface
 
-`gui/tcp_analyzer_gui.py` is a dark-themed desktop front end for the analyzer. Build the analyzer first (see above), then from the project root:
+`gui/synfin_gui.py` is a dark-themed desktop front end for the analyzer. Build the analyzer first (see above), then from the project root:
 
 ```bash
-python3 gui/tcp_analyzer_gui.py
+python3 gui/synfin_gui.py
 ```
 
-The GUI looks for the binary at `build/TCP_Analysis` (then `./TCP_Analysis`, then `TCP_Analysis` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
+The GUI looks for the binary at `build/synfin` (then `./synfin`, then `synfin` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
 
 ![Main window before an analysis](docs/screenshots/01-start.png)
 
@@ -112,7 +114,7 @@ The GUI looks for the binary at `build/TCP_Analysis` (then `./TCP_Analysis`, the
 
 1. **Captures** — **Add files…** picks one or more `.pcap` files, **Add folder…** adds every `.pcap` file in a directory. **Remove** (or the <kbd>Delete</kbd> key) deletes the selected entries, **Clear** empties the list.
 2. **Settings** — **Timeout, s** is the idle time after which an unfinished session is reported as timed out (`--timeout`); **Threads** is the number of worker threads (`--threads`, defaults to the number of CPU cores).
-3. **Analyze** — runs `TCP_Analysis` on all listed files. A progress bar runs while it works and sessions appear in the table as they are reported; **Stop** terminates it early.
+3. **Analyze** — runs `synfin` on all listed files. A progress bar runs while it works and sessions appear in the table as they are reported; **Stop** terminates it early.
 4. **Explore and export** the results (see below).
 
 ### Summary tiles
@@ -157,13 +159,13 @@ Click a column header to sort by it, click again to reverse the order; an arrow 
 Analyze one or more capture files directly:
 
 ```bash
-./TCP_Analysis -i capture1.pcap capture2.pcap
+./synfin -i capture1.pcap capture2.pcap
 ```
 
 Or point it at a directory and it will pick up every `.pcap` file in it:
 
 ```bash
-./TCP_Analysis -d /path/to/captures/
+./synfin -d /path/to/captures/
 ```
 
 ### Options
@@ -183,7 +185,7 @@ Or point it at a directory and it will pick up every `.pcap` file in it:
 Before the sessions, the analyzer prints a few plain-text header lines (`Analyzing files: …`, `Timeout: …`, `Threads: …`) to `stdout`. Keep only the JSON lines when piping into other tools:
 
 ```bash
-./TCP_Analysis -i capture.pcap | grep '^{' | jq -r '"\(.source.ip):\(.source.port) -> \(.destination.ip):\(.destination.port)"'
+./synfin -i capture.pcap | grep '^{' | jq -r '"\(.source.ip):\(.source.port) -> \(.destination.ip):\(.destination.port)"'
 ```
 
 ## Output format
@@ -216,17 +218,17 @@ Each session is printed to `stdout` as a single-line JSON object:
    Sessions left open when the input ends are reported too, with `closed_by: "end_of_capture"`.
 5. **Output** – a dedicated output thread drains completed sessions from a lock-free queue and prints one JSON object per line to `stdout`, so results can be consumed while analysis is still running.
 
-The GUI is a thin wrapper: it starts `TCP_Analysis -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
+The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
 
 ## Project layout
 
 | Path | Contents |
 | --- | --- |
-| `TCP_Analysis.cpp` | Command-line entry point: option parsing, input file discovery |
-| `Session_Analyzed.h` | `SessionAnalyzer` — packet parsing, worker threads, session tracking, JSON output |
-| `TCP_IP_Header.h` | Packed Ethernet / IPv4 / TCP header structs and flag constants |
+| `synfin.cpp` | Command-line entry point: option parsing, input file discovery |
+| `session_analyzer.h` | `SessionAnalyzer` — packet parsing, worker threads, session tracking, JSON output |
+| `tcp_ip_headers.h` | Packed Ethernet / IPv4 / TCP header structs and flag constants |
 | `CMakeLists.txt` | Build configuration |
-| `gui/tcp_analyzer_gui.py` | Tkinter GUI |
+| `gui/synfin_gui.py` | Tkinter GUI |
 | `tests/test_sessions.py` | End-to-end test with a synthetic capture |
 | `docs/screenshots/` | Screenshots used in this README |
 
@@ -235,7 +237,7 @@ The GUI is a thin wrapper: it starts `TCP_Analysis -t <timeout> -j <threads> -i 
 `tests/test_sessions.py` writes a synthetic capture with known sessions (normal close with the final ACK, reset with trailing packets, port reuse, capture starting mid-handshake, a real timeout, a session still open at the end, and 300 background sessions, all dated years in the past) and checks every session the analyzer reports, with 1 and 4 worker threads:
 
 ```bash
-python3 tests/test_sessions.py build/TCP_Analysis
+python3 tests/test_sessions.py build/synfin
 ```
 
 ## Known limitations

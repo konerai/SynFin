@@ -1,5 +1,5 @@
-#ifndef TCP_IP_HEADER_H
-#define TCP_IP_HEADER_H
+#ifndef TCP_IP_HEADERS_H
+#define TCP_IP_HEADERS_H
 
 #include <cstdint>
 
@@ -43,4 +43,4 @@ struct ether_header {
 };
 #pragma pack(pop)
 
-#endif //TCP_IP_HEADER_H
+#endif // TCP_IP_HEADERS_H
