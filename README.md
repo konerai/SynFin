@@ -1,3 +1,5 @@
+<img src="gui/icons/synfin-128.png" alt="SynFin icon" width="96" align="right">
+
 # SynFin
 
 **TCP sessions from SYN to FIN.** SynFin is a multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
@@ -105,6 +107,16 @@ This produces the `synfin` binary in `build/`.
 ```bash
 python3 gui/synfin_gui.py
 ```
+
+### Add SynFin to the application menu
+
+To launch SynFin from your desktop's application menu or dock, with its icon:
+
+```bash
+gui/install-desktop-entry.sh
+```
+
+This installs a `synfin.desktop` entry and the icon for the current user only (under `~/.local/share`, no root needed). It points at the GUI where it is now, so run it again if you move the folder. Remove it with `gui/install-desktop-entry.sh --uninstall`.
 
 The GUI looks for the binary at `build/synfin` (then `./synfin`, then `synfin` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
 
@@ -229,6 +241,8 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 | `tcp_ip_headers.h` | Packed Ethernet / IPv4 / TCP header structs and flag constants |
 | `CMakeLists.txt` | Build configuration |
 | `gui/synfin_gui.py` | Tkinter GUI |
+| `gui/icons/` | App icon in sizes from 16 to 512 px |
+| `gui/install-desktop-entry.sh` | Adds SynFin to the application menu |
 | `tests/test_sessions.py` | End-to-end test with a synthetic capture |
 | `docs/screenshots/` | Screenshots used in this README |
 
