@@ -7,7 +7,7 @@
 
 namespace po = boost::program_options;
 
-static const char* const kVersion = "0.2.0";
+static const char* const kVersion = "0.3.0";
 
 int main(int argc, char* argv[]) {
     std::vector<std::string> input_files;
