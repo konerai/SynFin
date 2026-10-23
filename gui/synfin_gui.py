@@ -347,12 +347,12 @@ class AnalyzerApp:
         # Run controls
         actions = tk.Frame(sidebar, bg=BG)
         actions.pack(fill=tk.X, pady=(16, 0))
-        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure((0, 1), weight=1, uniform="actions")  # same width for both buttons
         self.run_button = ttk.Button(actions, text="▶  Analyze", style="Accent.TButton", command=self._start)
-        self.run_button.grid(row=0, column=0, sticky="ew")
+        self.run_button.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         self.stop_button = ttk.Button(actions, text="■  Stop", style="Stop.TButton", command=self._stop,
                                       state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.stop_button.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
         self.progress = ttk.Progressbar(actions, mode="indeterminate", style="Accent.Horizontal.TProgressbar")
         self.progress.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         self.progress.grid_remove()
