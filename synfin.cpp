@@ -38,6 +38,31 @@ static bool IsCaptureFile(const std::filesystem::path& path) {
     return ext == ".pcap" || ext == ".pcapng";
 }
 
+#ifdef _WIN32
+// Started from Explorer (double-clicked, or capture files dropped onto it), synfin.exe
+// gets a console window of its own that closes the moment it exits. Keep that window
+// open until Enter is pressed so the help or the results can be read. Nothing changes
+// when it runs in an existing console or with redirected output.
+class KeepOwnConsoleOpen {
+public:
+    KeepOwnConsoleOpen() {
+        DWORD processes[2];
+        DWORD mode;
+        own_console_ = GetConsoleProcessList(processes, 2) == 1 &&
+                       GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), &mode);
+    }
+
+    ~KeepOwnConsoleOpen() {
+        if (!own_console_) return;
+        std::cout << "\nPress Enter to close this window..." << std::flush;
+        std::cin.get();
+    }
+
+private:
+    bool own_console_ = false;
+};
+#endif
+
 // Command-line arguments as UTF-8. On Windows argv uses the ANSI code page, which can't
 // hold every file name, so the arguments are taken from the UTF-16 command line instead.
 static std::vector<std::string> Utf8Arguments(int argc, char* argv[]) {
@@ -83,9 +108,17 @@ int main(int argc, char* argv[]) {
     long num_threads = std::max(1u, std::thread::hardware_concurrency());
 
 #ifdef _WIN32
+    KeepOwnConsoleOpen keep_console_open;
     SetConsoleOutputCP(CP_UTF8);  // file names are printed as UTF-8
 #endif
     std::vector<std::string> args = Utf8Arguments(argc, argv);
+    if (args.empty()) {
+        std::cout << kUsage;
+#ifdef _WIN32
+        std::cout << "\nTip: drop .pcap / .pcapng files onto synfin.exe in Explorer to analyze them.\n";
+#endif
+        return 1;
+    }
     for (size_t i = 0; i < args.size(); ++i) {
         std::string arg = args[i];
         std::string value;

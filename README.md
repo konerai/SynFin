@@ -8,19 +8,21 @@
 
 <p align="center">
   <a href="https://github.com/konerai/SynFin/releases/latest"><img src="https://img.shields.io/github/v/release/konerai/SynFin?color=2f81f7" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/platform-Linux%20x86__64%20%7C%20ARM64-3fb950" alt="Linux x86_64 | ARM64">
+  <img src="https://img.shields.io/badge/Linux-x86__64%20%7C%20ARM64-3fb950" alt="Linux x86_64 | ARM64">
+  <img src="https://img.shields.io/badge/Windows-x64-3fb950" alt="Windows x64">
+  <a href="https://github.com/konerai/SynFin/actions/workflows/ci.yml"><img src="https://github.com/konerai/SynFin/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
-SynFin is a multithreaded C++ tool that reads `.pcap` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
+SynFin is a multithreaded C++ tool that reads `.pcap` / `.pcapng` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
 
-- **`synfin`** — the command-line analyzer; prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
-- **SynFin GUI** — a dark-themed desktop window (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table.
+- **`synfin`** — the command-line analyzer for Linux and Windows (`synfin.exe`, a single portable file); prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
+- **SynFin GUI** — a dark-themed desktop window for Linux (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table. A portable Windows GUI is in the works.
 
 ![SynFin GUI with analysis results](docs/screenshots/02-results.png)
 
 > SynFin was called *TCP-IP_Analyzed* before v0.3.0, and its binary was `TCP_Analysis`.
 
-It's built for offline analysis of large packet captures: instead of loading a whole capture into memory, it streams packets from libpcap, shards them across worker threads by session, and emits results as soon as each session ends.
+It's built for offline analysis of large packet captures: instead of loading a whole capture into memory, it reads packets as a stream, shards them across worker threads by session, and emits results as soon as each session ends.
 
 ## Contents
 
@@ -58,7 +60,11 @@ Only IPv4/TCP packets are analyzed; everything else (IPv6, UDP, ARP, …) is ski
 
 ## Download
 
-Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/SynFin/releases/latest). The binary needs only glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+); releases up to 0.4.0 also needed `libdbus`.
+Ready-to-run builds are attached to every [release](https://github.com/konerai/SynFin/releases/latest).
+
+### Linux (x86_64, ARM64)
+
+The archive holds the `synfin` binary, the GUI and its icons. The binary needs only glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+); releases up to 0.4.0 also needed `libdbus`.
 
 ```bash
 tar -xzf synfin-<version>-linux-x86_64.tar.gz
@@ -66,6 +72,21 @@ cd synfin-<version>-linux-x86_64
 ./synfin --version
 python3 gui/synfin_gui.py   # needs Tkinter, see below
 ```
+
+### Windows (x64)
+
+`synfin-<version>-windows-x64.exe` is a single portable file for 64-bit Windows 10 and 11 — nothing to install. Put it anywhere (rename it to `synfin.exe` if you like) and:
+
+- **drop capture files onto it** in Explorer — a window opens with the sessions and stays open until you press Enter;
+- **double-click it** to see the help;
+- **run it from Command Prompt or PowerShell**, exactly like on Linux:
+
+```bat
+synfin.exe -i C:\captures\office.pcapng
+synfin.exe -d C:\captures -t 300 > sessions.jsonl
+```
+
+The first time, Windows SmartScreen may say *"Windows protected your PC"* because the exe isn't code-signed: click **More info → Run anyway**. In Windows PowerShell 5.1, `>` writes UTF-16; use `| Set-Content -Encoding utf8 sessions.jsonl` to get a UTF-8 file for other tools.
 
 To build from source instead, read on.
 
@@ -122,6 +143,10 @@ cmake --build build-win
 ```
 
 It also builds natively with Visual Studio 2022 (`cmake -B build -DSYNFIN_STATIC=ON && cmake --build build --config Release`). The exe carries the SynFin icon and version, and accepts file names in any language. A Windows GUI is in the works.
+
+### Continuous integration
+
+Every push and pull request is built and tested by [GitHub Actions](.github/workflows/ci.yml): on Linux with GCC, as a MinGW cross-built `synfin.exe` that is then tested on a real Windows machine, and natively with MSVC.
 
 ## Graphical interface
 
@@ -267,6 +292,7 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 | `CMakeLists.txt` | Build configuration (the version number lives here) |
 | `cmake/toolchain-mingw-w64-x86_64.cmake` | Cross-compiling for Windows with MinGW-w64 |
 | `windows/` | Windows icon and the resource file with the exe's version info |
+| `.github/workflows/ci.yml` | Builds and tests on Linux and Windows |
 | `gui/synfin_gui.py` | Tkinter GUI |
 | `gui/icons/` | App icon in sizes from 16 to 512 px |
 | `gui/install-desktop-entry.sh` | Adds SynFin to the application menu |

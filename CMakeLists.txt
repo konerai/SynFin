@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 # The version shown by `synfin --version` and in the Windows file properties.
-project(SynFin VERSION 0.4.0 LANGUAGES CXX)
+project(SynFin VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -39,6 +39,7 @@ endif()
 if(SYNFIN_STATIC AND NOT MSVC)
     if(MINGW)
         target_link_libraries(synfin -static)
+        target_link_options(synfin PRIVATE $<$<CONFIG:Release>:-s>)  # strip symbols
     else()
         target_link_libraries(synfin -static-libstdc++ -static-libgcc)
     endif()
