@@ -38,22 +38,27 @@ It's built for offline analysis of large packet captures: instead of loading a w
 
 ## Where it runs
 
-**Linux only.** The analyzer relies on POSIX/Linux headers (`<endian.h>`, `<unistd.h>`), so it does not build as-is on Windows or macOS. The GUI is plain Python + Tkinter and runs on any Linux desktop (X11 or Wayland via XWayland).
+**Linux.** The analyzer is plain C++17 with no third-party libraries — it reads capture files itself — so it builds with any recent GCC or Clang. The GUI is Python + Tkinter and runs on any Linux desktop (X11 or Wayland via XWayland). A portable Windows version is planned.
 
-Tested builds:
+Tested builds (the analyzer builds without warnings with `-Wall -Wextra` and passes the [test suite](#tests)):
 
-| Distribution | Compiler | CMake | Boost | libpcap | jsoncpp | Python / Tk | Result |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Ubuntu 24.04 LTS | GCC 13.3 | 3.28 | 1.83 | 1.10.4 | 1.9.5 | 3.12 / 8.6 | builds cleanly, CLI and GUI work |
-| Ubuntu 22.04 LTS | GCC 11.4 | 3.22 | 1.74 | 1.10.1 | 1.9.5 | — | builds cleanly |
+| Distribution | Compiler | CMake |
+| --- | --- | --- |
+| Ubuntu 24.04 LTS | GCC 13.3 | 3.28 |
+| Ubuntu 22.04 LTS | GCC 11.4 | 3.22 |
+| Debian 12 | GCC 12.2 | 3.25 |
+| Fedora 42 | GCC 15 | 3.31 |
 
-Other distributions with the same or newer library versions (Debian 12+, Linux Mint 21+, Fedora, Arch) should work as well — install the equivalent packages listed below.
+**Input:** offline capture files — what `tcpdump -w`, `dumpcap` and Wireshark save:
 
-**Input:** offline capture files with an Ethernet link layer (`DLT_EN10MB`) — what `tcpdump -w` and Wireshark produce on a normal Ethernet or Wi-Fi interface. Only IPv4/TCP packets are analyzed; everything else (IPv6, UDP, ARP, …) is skipped. Live capture from a network interface is not supported.
+- **file formats:** `.pcap` (microsecond or nanosecond timestamps, either byte order) and `.pcapng` (any number of sections and interfaces);
+- **link layers:** Ethernet (including 802.1Q / QinQ VLAN tags), Linux cooked capture v1 and v2 (`tcpdump -i any`), raw IP, and BSD/Npcap loopback.
+
+Only IPv4/TCP packets are analyzed; everything else (IPv6, UDP, ARP, …) is skipped. Live capture from a network interface is not supported.
 
 ## Download
 
-Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/SynFin/releases/latest). Boost, jsoncpp and libpcap are built into the binary; it only needs glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+) and `libdbus`, which every mainstream distribution ships.
+Ready-to-run builds for Linux x86_64 and ARM64 are attached to every [release](https://github.com/konerai/SynFin/releases/latest). The binary needs only glibc 2.34+ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9+); releases up to 0.4.0 also needed `libdbus`.
 
 ```bash
 tar -xzf synfin-<version>-linux-x86_64.tar.gz
@@ -66,13 +71,10 @@ To build from source instead, read on.
 
 ## Requirements
 
-Analyzer:
+Analyzer — no libraries needed:
 
 - CMake 3.10+
 - A C++17 compiler (GCC 9+ or Clang 9+)
-- [libpcap](https://www.tcpdump.org/) (development headers)
-- Boost 1.74+ (`program_options`, `lockfree`)
-- [jsoncpp](https://github.com/open-source-parsers/jsoncpp)
 
 GUI (optional):
 
@@ -82,19 +84,19 @@ GUI (optional):
 On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install build-essential cmake libpcap-dev libboost-program-options-dev libjsoncpp-dev python3-tk
+sudo apt-get install build-essential cmake python3-tk
 ```
 
 On Fedora:
 
 ```bash
-sudo dnf install gcc-c++ cmake libpcap-devel boost-devel jsoncpp-devel python3-tkinter
+sudo dnf install gcc-c++ cmake python3-tkinter
 ```
 
 On Arch:
 
 ```bash
-sudo pacman -S base-devel cmake libpcap boost jsoncpp tk
+sudo pacman -S base-devel cmake tk
 ```
 
 ## Building
@@ -180,10 +182,10 @@ Click a column header to sort by it, click again to reverse the order; an arrow 
 Analyze one or more capture files directly:
 
 ```bash
-./synfin -i capture1.pcap capture2.pcap
+./synfin -i capture1.pcap capture2.pcapng
 ```
 
-Or point it at a directory and it will pick up every `.pcap` file in it:
+Or point it at a directory and it will pick up every `.pcap` and `.pcapng` file in it, in name order:
 
 ```bash
 ./synfin -d /path/to/captures/
@@ -193,15 +195,15 @@ Or point it at a directory and it will pick up every `.pcap` file in it:
 
 | Option | Description | Default |
 | --- | --- | --- |
-| `-i`, `--input <files...>` | One or more input `.pcap` files | — |
-| `-d`, `--dir <path>` | Directory to scan for `.pcap` files | — |
+| `-i`, `--input <files...>` | One or more capture files (`-i` itself is optional: arguments that aren't options are input files) | — |
+| `-d`, `--dir <path>` | Directory to scan for `.pcap` / `.pcapng` files; can be given more than once | — |
 | `-t`, `--timeout <seconds>` | Idle time (in capture time) after which an open session is force-closed and reported | `600` |
 | `-j`, `--threads <n>` | Number of worker threads used to process sessions in parallel | number of CPU cores |
-| `-q`, `--queue-size <n>` | Size of the internal packet queues (currently not used, see below) | `2048` |
+| `-q`, `--queue-size <n>` | Packets that may wait in the queue of each worker thread | `2048` |
 | `-v`, `--version` | Show the version | — |
 | `-h`, `--help` | Show usage information | — |
 
-`--input`/`-i` and `--dir`/`-d` can be combined; at least one input file must be found or the tool exits with an error.
+`--input`/`-i` and `--dir`/`-d` can be combined; at least one input file must be found or the tool exits with an error. Options with values also accept the `--option=value` form. A file that can't be read is reported on `stderr` and skipped; a file that is cut off is analyzed up to the point where it ends.
 
 Before the sessions, the analyzer prints a few plain-text header lines (`Analyzing files: …`, `Timeout: …`, `Threads: …`) to `stdout`. Keep only the JSON lines when piping into other tools:
 
@@ -228,16 +230,16 @@ Each session is printed to `stdout` as a single-line JSON object:
 
 ## How it works
 
-1. **Packet capture** – each input file is opened with `libpcap` (`pcap_open_offline`) and read packet by packet.
-2. **Parsing** – only Ethernet-framed IPv4/TCP packets are analyzed (`DLT_EN10MB` link layer); everything else is skipped. The Ethernet, IPv4, and TCP headers are parsed manually to pull out source/destination IP and port and the TCP flags.
-3. **Session sharding** – each packet is reduced to a canonical `SessionKey` (the IP:port pair of both endpoints, direction-independent) and hashed to one of *N* worker threads. Because a given session always hashes to the same worker, its packets are processed in order with no locking needed between sessions.
+1. **Reading** – each input file is read packet by packet by SynFin's own reader (`capture_reader.h`), which understands `.pcap` and `.pcapng` without any external library.
+2. **Parsing** – the link-layer header (Ethernet with optional VLAN tags, Linux cooked capture, raw IP or loopback) is skipped to reach the IPv4 header; only IPv4/TCP packets go further. The IPv4 and TCP headers are read byte by byte to get the source/destination IP and port and the TCP flags.
+3. **Session sharding** – each packet is reduced to a canonical `SessionKey` (the IP:port pair of both endpoints, direction-independent) and hashed to one of *N* worker threads; packets travel to the workers in batches. Because a given session always hashes to the same worker, its packets are processed in order with no locking needed between sessions.
 4. **Session tracking** – each worker keeps a hash map of open sessions and updates the start/end time on every packet. A session is closed and handed off for output when:
    - a **RST** is seen, or
    - **FIN** has been seen in both directions, or
    - it has been idle longer than `--timeout` seconds. Idle time is measured in capture time — against the timestamp of the packet being read, not the computer's clock — so old captures are handled correctly. The check runs every 1000 packets and once more at the end of the input.
 
    Sessions left open when the input ends are reported too, with `closed_by: "end_of_capture"`.
-5. **Output** – a dedicated output thread drains completed sessions from a lock-free queue and prints one JSON object per line to `stdout`, so results can be consumed while analysis is still running.
+5. **Output** – a dedicated output thread drains completed sessions from a queue and prints one JSON object per line to `stdout`, so results can be consumed while analysis is still running.
 
 The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
 
@@ -246,8 +248,10 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 | Path | Contents |
 | --- | --- |
 | `synfin.cpp` | Command-line entry point: option parsing, input file discovery |
-| `session_analyzer.h` | `SessionAnalyzer` — packet parsing, worker threads, session tracking, JSON output |
-| `tcp_ip_headers.h` | Packed Ethernet / IPv4 / TCP header structs and flag constants |
+| `session_analyzer.h` | `SessionAnalyzer` — worker threads, session tracking, JSON output |
+| `capture_reader.h` | Reader for `.pcap` and `.pcapng` files |
+| `tcp_ip_headers.h` | Link-layer, IPv4 and TCP header parsing |
+| `blocking_queue.h` | Thread-safe queue between the reader, the workers and the output thread |
 | `CMakeLists.txt` | Build configuration |
 | `gui/synfin_gui.py` | Tkinter GUI |
 | `gui/icons/` | App icon in sizes from 16 to 512 px |
@@ -257,7 +261,7 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 
 ## Tests
 
-`tests/test_sessions.py` writes a synthetic capture with known sessions (normal close with the final ACK, reset with trailing packets, port reuse, capture starting mid-handshake, a real timeout, a session still open at the end, and 300 background sessions, all dated years in the past) and checks every session the analyzer reports, with 1 and 4 worker threads:
+`tests/test_sessions.py` writes a synthetic capture with known sessions (normal close with the final ACK, reset with trailing packets, port reuse, capture starting mid-handshake, a real timeout, a session still open at the end, and 300 background sessions, all dated years in the past) and checks every session the analyzer reports. The same sessions are written in every supported file format (pcap with micro- and nanosecond timestamps, big-endian pcap, pcapng, big-endian nanosecond pcapng, pcapng with two sections) and link layer (Ethernet, VLAN, Linux cooked v1/v2, raw IP, loopback), with 1 and 4 worker threads:
 
 ```bash
 python3 tests/test_sessions.py build/synfin
@@ -265,5 +269,5 @@ python3 tests/test_sessions.py build/synfin
 
 ## Known limitations
 
-- Only Ethernet-framed IPv4/TCP is analyzed; IPv6, VLAN-tagged frames and other link layers are skipped. `--dir` and the GUI's **Add folder…** pick up only `.pcap` files (not `.pcapng`).
-- The `-q`/`--queue-size` option is parsed but not yet wired into `SessionAnalyzer`'s internal queue sizes.
+- Only IPv4/TCP is analyzed; IPv6 traffic is skipped.
+- Link layers other than the ones listed under [Where it runs](#where-it-runs) (for example raw 802.11 Wi-Fi frames from monitor mode) are skipped with a warning.

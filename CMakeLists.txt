@@ -5,11 +5,23 @@ project(SynFin LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-find_package(Boost 1.74 REQUIRED COMPONENTS program_options)
-include_directories(${Boost_INCLUDE_DIRS})
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
 
-find_package(jsoncpp REQUIRED)
+# Link the C/C++ runtime into the binary so it runs without matching libraries installed.
+option(SYNFIN_STATIC "Link the runtime statically" OFF)
+
+find_package(Threads REQUIRED)
 
 add_executable(synfin synfin.cpp)
 
-target_link_libraries(synfin ${Boost_LIBRARIES} pcap jsoncpp_lib)
+target_link_libraries(synfin Threads::Threads)
+
+if(SYNFIN_STATIC)
+    if(MINGW)
+        target_link_libraries(synfin -static)
+    else()
+        target_link_libraries(synfin -static-libstdc++ -static-libgcc)
+    endif()
+endif()
