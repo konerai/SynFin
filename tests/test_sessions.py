@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end test for synfin.
 
-Writes a synthetic capture with known sessions, runs the analyzer on it and
-checks every reported session. Uses only the Python standard library.
+Writes a synthetic capture with known sessions in several file formats (pcap,
+pcapng) and link layers, runs the analyzer on each and checks every reported
+session. Uses only the Python standard library.
 
 Usage: python3 tests/test_sessions.py [path/to/synfin]
 """
@@ -29,22 +30,98 @@ class Capture:
         tcp = struct.pack("!HHIIBBHHH", sport, dport, 0, 0, 5 << 4, flags, 65535, 0, 0)
         ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 0, 0, 64, 6, 0,
                          bytes(map(int, sip.split("."))), bytes(map(int, dip.split("."))))
-        eth = b"\x02\x00\x00\x00\x00\x01\x02\x00\x00\x00\x00\x02\x08\x00"
-        self.packets.append((BASE + t, eth + ip + tcp))
+        self.packets.append((BASE + t, ip + tcp))
 
     def handshake(self, t, client, server):
         self.add(t, client, server, SYN)
         self.add(t + 0.01, server, client, SYN | ACK)
         self.add(t + 0.02, client, server, ACK)
 
-    def write(self, path):
-        self.packets.sort(key=lambda p: p[0])
+    def write(self, path, fmt="pcap", link="ethernet"):
+        link_type, header = LINKS[link]
+        packets = [(split_ts(ts), header + data) for ts, data in sorted(self.packets, key=lambda p: p[0])]
         with open(path, "wb") as f:
-            f.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1))
-            for ts, data in self.packets:
-                sec = int(ts)
-                usec = int(round((ts - sec) * 1e6))
-                f.write(struct.pack("<IIII", sec, usec, len(data), len(data)) + data)
+            if fmt.startswith("pcapng"):
+                write_pcapng(f, fmt, link_type, packets)
+            else:
+                write_pcap(f, fmt, link_type, packets)
+
+
+ETHERNET = b"\x02\x00\x00\x00\x00\x01\x02\x00\x00\x00\x00\x02"
+# link name -> (link-layer header type, header put in front of every IP packet)
+LINKS = {
+    "ethernet": (1, ETHERNET + b"\x08\x00"),
+    "vlan": (1, ETHERNET + b"\x81\x00\x00\x64\x08\x00"),
+    "linux-sll": (113, struct.pack("!HHH8sH", 0, 1, 6, b"\x02\x00\x00\x00\x00\x01", 0x0800)),
+    "linux-sll2": (276, struct.pack("!HHIHBB8s", 0x0800, 0, 1, 1, 0, 6, b"\x02\x00\x00\x00\x00\x01")),
+    "raw": (101, b""),
+    "loopback": (0, struct.pack("<I", 2)),
+}
+
+
+def split_ts(ts):
+    """Float seconds -> (seconds, nanoseconds)."""
+    sec = int(ts)
+    return sec, int(round((ts - sec) * 1e9))
+
+
+def write_pcap(f, fmt, link_type, packets):
+    order = ">" if fmt == "pcap-be" else "<"
+    nanos = fmt == "pcap-ns"
+    f.write(struct.pack(order + "IHHiIII", 0xA1B23C4D if nanos else 0xA1B2C3D4, 2, 4, 0, 0, 65535, link_type))
+    for (sec, ns), data in packets:
+        frac = ns if nanos else ns // 1000
+        f.write(struct.pack(order + "IIII", sec, frac, len(data), len(data)) + data)
+
+
+def pcapng_block(order, block_type, body):
+    body += b"\x00" * (-len(body) % 4)
+    total = len(body) + 12
+    return struct.pack(order + "II", block_type, total) + body + struct.pack(order + "I", total)
+
+
+def write_pcapng_section(f, order, link_type, packets, nanos):
+    f.write(pcapng_block(order, 0x0A0D0D0A, struct.pack(order + "IHHq", 0x1A2B3C4D, 1, 0, -1)))
+    options = b""
+    if nanos:
+        options = struct.pack(order + "HH", 9, 1) + b"\x09\x00\x00\x00" + struct.pack(order + "HH", 0, 0)
+    f.write(pcapng_block(order, 1, struct.pack(order + "HHI", link_type, 0, 65535) + options))
+    f.write(pcapng_block(order, 4, struct.pack(order + "HH", 0, 0)))  # name resolution: skipped
+    for (sec, ns), data in packets:
+        ticks = sec * 10**9 + ns if nanos else sec * 10**6 + ns // 1000
+        body = struct.pack(order + "IIIII", 0, ticks >> 32, ticks & 0xFFFFFFFF, len(data), len(data)) + data
+        f.write(pcapng_block(order, 6, body))
+
+
+def write_pcapng(f, fmt, link_type, packets):
+    if fmt == "pcapng":
+        write_pcapng_section(f, "<", link_type, packets, nanos=False)
+    elif fmt == "pcapng-ns-be":
+        write_pcapng_section(f, ">", link_type, packets, nanos=True)
+    elif fmt == "pcapng-sections":
+        # Two sections with different byte orders; interface ids restart in each.
+        half = len(packets) // 2
+        write_pcapng_section(f, "<", link_type, packets[:half], nanos=False)
+        write_pcapng_section(f, ">", link_type, packets[half:], nanos=True)
+    else:
+        raise ValueError(fmt)
+
+
+# (file format, link layer, worker threads)
+VARIANTS = [
+    ("pcap", "ethernet", 1),
+    ("pcap", "ethernet", 4),
+    ("pcap-ns", "ethernet", 4),
+    ("pcap-be", "ethernet", 4),
+    ("pcapng", "ethernet", 4),
+    ("pcapng-ns-be", "ethernet", 4),
+    ("pcapng-sections", "ethernet", 4),
+    ("pcap", "vlan", 4),
+    ("pcap", "linux-sll", 4),
+    ("pcapng", "linux-sll2", 4),
+    ("pcap", "raw", 4),
+    ("pcapng", "loopback", 4),
+]
 
 
 def build_capture():
@@ -155,12 +232,12 @@ def main():
     cap, expected = build_capture()
     failed = False
     with tempfile.TemporaryDirectory() as tmp:
-        pcap = os.path.join(tmp, "test.pcap")
-        cap.write(pcap)
-        for threads in (1, 4):
-            errors = check(run(binary, pcap, threads), expected)
+        for fmt, link, threads in VARIANTS:
+            path = os.path.join(tmp, f"test-{fmt}-{link}.{'pcapng' if fmt.startswith('pcapng') else 'pcap'}")
+            cap.write(path, fmt, link)
+            errors = check(run(binary, path, threads), expected)
             status = "FAIL" if errors else "ok"
-            print(f"[{status}] {len(expected)} sessions, {threads} thread(s)")
+            print(f"[{status}] {len(expected)} sessions, {fmt}, {link}, {threads} thread(s)")
             for e in errors[:20]:
                 print("   ", e)
             failed |= bool(errors)

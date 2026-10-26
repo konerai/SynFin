@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SynFin: a desktop GUI for the synfin TCP session analyzer.
 
-Runs the synfin binary on the chosen .pcap files and shows every
+Runs the synfin binary on the chosen .pcap / .pcapng files and shows every
 reported TCP session in a table. Needs only Python 3 with Tkinter
 (Debian/Ubuntu: sudo apt-get install python3-tk).
 """
@@ -26,7 +26,7 @@ BINARY_CANDIDATES = [
 ]
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
-PCAP_EXTENSIONS = (".pcap",)
+PCAP_EXTENSIONS = (".pcap", ".pcapng")
 ROWS_PER_TICK = 2000  # keep the UI responsive on huge captures
 
 # Dark palette
@@ -332,7 +332,7 @@ class AnalyzerApp:
         )
         self.files_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         self.files_list.bind("<Delete>", lambda _: self._remove_files())
-        self.files_empty = tk.Label(list_frame, text="No captures yet\nAdd .pcap files or a folder",
+        self.files_empty = tk.Label(list_frame, text="No captures yet\nAdd .pcap / .pcapng files or a folder",
                                     font=self.f_small, bg=RAISED, fg=FAINT, justify=tk.CENTER)
 
         buttons = tk.Frame(files, bg=SURFACE)
@@ -474,12 +474,12 @@ class AnalyzerApp:
     def _add_files(self):
         paths = filedialog.askopenfilenames(
             title="Select capture files",
-            filetypes=[("pcap captures", "*.pcap"), ("All files", "*")],
+            filetypes=[("Captures", "*.pcap *.pcapng"), ("All files", "*")],
         )
         self._add_paths(paths)
 
     def _add_folder(self):
-        folder = filedialog.askdirectory(title="Select folder with .pcap files")
+        folder = filedialog.askdirectory(title="Select folder with captures")
         if not folder:
             return
         found = sorted(
@@ -488,7 +488,7 @@ class AnalyzerApp:
             if name.lower().endswith(PCAP_EXTENSIONS)
         )
         if not found:
-            messagebox.showinfo("No captures", f"No .pcap files in {folder}")
+            messagebox.showinfo("No captures", f"No .pcap or .pcapng files in {folder}")
         self._add_paths(found)
 
     def _remove_files(self):
@@ -530,7 +530,7 @@ class AnalyzerApp:
             messagebox.showerror("Analyzer not found", f"Cannot run {binary!r}.\nBuild the project first (see README).")
             return
         if not self.files:
-            messagebox.showerror("No captures", "Add at least one .pcap file.")
+            messagebox.showerror("No captures", "Add at least one capture file.")
             return
         try:
             timeout = int(self.timeout_var.get())
