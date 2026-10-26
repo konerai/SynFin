@@ -38,7 +38,7 @@ It's built for offline analysis of large packet captures: instead of loading a w
 
 ## Where it runs
 
-**Linux.** The analyzer is plain C++17 with no third-party libraries — it reads capture files itself — so it builds with any recent GCC or Clang. The GUI is Python + Tkinter and runs on any Linux desktop (X11 or Wayland via XWayland). A portable Windows version is planned.
+**Linux and Windows.** The analyzer is plain C++17 with no third-party libraries — it reads capture files itself — so it builds with any recent GCC, Clang or MSVC, and as a single portable `synfin.exe` for Windows 10/11 (see [Building](#building)). The GUI is Python + Tkinter and runs on any Linux desktop (X11 or Wayland via XWayland); a portable Windows GUI is in the works.
 
 Tested builds (the analyzer builds without warnings with `-Wall -Wextra` and passes the [test suite](#tests)):
 
@@ -110,6 +110,18 @@ make
 ```
 
 This produces the `synfin` binary in `build/`.
+
+### Windows command-line build
+
+`synfin.exe` is cross-compiled from Linux with MinGW-w64 into a single static file that runs on 64-bit Windows 10/11 without installing anything:
+
+```bash
+sudo apt-get install g++-mingw-w64-x86-64-posix cmake
+cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x86_64.cmake -DSYNFIN_STATIC=ON
+cmake --build build-win
+```
+
+It also builds natively with Visual Studio 2022 (`cmake -B build -DSYNFIN_STATIC=ON && cmake --build build --config Release`). The exe carries the SynFin icon and version, and accepts file names in any language. A Windows GUI is in the works.
 
 ## Graphical interface
 
@@ -252,7 +264,9 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 | `capture_reader.h` | Reader for `.pcap` and `.pcapng` files |
 | `tcp_ip_headers.h` | Link-layer, IPv4 and TCP header parsing |
 | `blocking_queue.h` | Thread-safe queue between the reader, the workers and the output thread |
-| `CMakeLists.txt` | Build configuration |
+| `CMakeLists.txt` | Build configuration (the version number lives here) |
+| `cmake/toolchain-mingw-w64-x86_64.cmake` | Cross-compiling for Windows with MinGW-w64 |
+| `windows/` | Windows icon and the resource file with the exe's version info |
 | `gui/synfin_gui.py` | Tkinter GUI |
 | `gui/icons/` | App icon in sizes from 16 to 512 px |
 | `gui/install-desktop-entry.sh` | Adds SynFin to the application menu |

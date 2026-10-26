@@ -233,7 +233,8 @@ def main():
     failed = False
     with tempfile.TemporaryDirectory() as tmp:
         for fmt, link, threads in VARIANTS:
-            path = os.path.join(tmp, f"test-{fmt}-{link}.{'pcapng' if fmt.startswith('pcapng') else 'pcap'}")
+            # A non-ASCII name with a space checks that file names reach the analyzer intact.
+            path = os.path.join(tmp, f"захват {fmt}-{link}.{'pcapng' if fmt.startswith('pcapng') else 'pcap'}")
             cap.write(path, fmt, link)
             errors = check(run(binary, path, threads), expected)
             status = "FAIL" if errors else "ok"
