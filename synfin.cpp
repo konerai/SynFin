@@ -1,3 +1,10 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
 #include "session_analyzer.h"
 #include <algorithm>
 #include <cctype>
@@ -7,7 +14,7 @@
 #include <system_error>
 #include <vector>
 
-static const char* const kVersion = "0.4.0";
+static const char* const kVersion = SYNFIN_VERSION;
 
 static const char* const kUsage =
     "Usage: synfin [options] [capture files...]\n"
@@ -29,6 +36,28 @@ static bool IsCaptureFile(const std::filesystem::path& path) {
     std::string ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
     return ext == ".pcap" || ext == ".pcapng";
+}
+
+// Command-line arguments as UTF-8. On Windows argv uses the ANSI code page, which can't
+// hold every file name, so the arguments are taken from the UTF-16 command line instead.
+static std::vector<std::string> Utf8Arguments(int argc, char* argv[]) {
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+    std::vector<std::string> args;
+    int count = 0;
+    LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    for (int i = 1; wide && i < count; ++i) {
+        int size = WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, nullptr, 0, nullptr, nullptr);
+        std::string arg(size > 0 ? size - 1 : 0, '\0');
+        if (size > 1) WideCharToMultiByte(CP_UTF8, 0, wide[i], -1, &arg[0], size, nullptr, nullptr);
+        args.push_back(arg);
+    }
+    LocalFree(wide);
+    return args;
+#else
+    return std::vector<std::string>(argv + 1, argv + argc);
+#endif
 }
 
 static bool ParseNumber(const std::string& option, const std::string& text, long min, long& value) {
@@ -53,7 +82,10 @@ int main(int argc, char* argv[]) {
     long queue_size = 2048;
     long num_threads = std::max(1u, std::thread::hardware_concurrency());
 
-    std::vector<std::string> args(argv + 1, argv + argc);
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);  // file names are printed as UTF-8
+#endif
+    std::vector<std::string> args = Utf8Arguments(argc, argv);
     for (size_t i = 0; i < args.size(); ++i) {
         std::string arg = args[i];
         std::string value;
@@ -83,15 +115,15 @@ int main(int argc, char* argv[]) {
             std::cout << "synfin " << kVersion << std::endl;
             return 0;
         } else if (arg == "-i" || arg == "--input") {
-            if (has_inline_value) input_files.emplace_back(value);
+            if (has_inline_value) input_files.push_back(std::filesystem::u8path(value));
             // Every following argument that is not an option is an input file.
             while (i + 1 < args.size() && (args[i + 1].empty() || args[i + 1][0] != '-')) {
-                input_files.emplace_back(args[++i]);
+                input_files.push_back(std::filesystem::u8path(args[++i]));
             }
         } else if (arg == "-d" || arg == "--dir") {
             std::string dir;
             if (!next_value(dir)) return 1;
-            input_dirs.emplace_back(dir);
+            input_dirs.push_back(std::filesystem::u8path(dir));
         } else if (arg == "-t" || arg == "--timeout") {
             std::string text;
             if (!next_value(text) || !ParseNumber(arg, text, 1, timeout)) return 1;
@@ -105,7 +137,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error parsing options: unknown option " << arg << "\n\n" << kUsage;
             return 1;
         } else {
-            input_files.emplace_back(arg);
+            input_files.push_back(std::filesystem::u8path(arg));
         }
     }
 
