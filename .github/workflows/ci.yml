@@ -20,7 +20,7 @@ jobs:
         run: python3 tests/test_sessions.py build/synfin
 
   windows-exe:
-    name: Windows exe (MinGW cross-build)
+    name: Windows exes (MinGW cross-build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -39,10 +39,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: synfin-windows-x64
-          path: build-win/synfin.exe
+          path: |
+            build-win/synfin.exe
+            build-win/synfin-gui.exe
 
   windows-test:
-    name: Windows exe on Windows
+    name: Windows exes on Windows
     needs: windows-exe
     runs-on: windows-latest
     timeout-minutes: 15
@@ -54,10 +56,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Test
+      - name: Test the command-line exe
         run: |
           .\synfin.exe --version
           python tests/test_sessions.py synfin.exe
+      - name: Test the GUI
+        run: python tests/test_gui_export.py synfin.exe synfin-gui.exe
+      - name: Screenshots of the GUI
+        run: |
+          python docs/make_demo_captures.py office_traffic.pcap
+          python docs/make_demo_captures.py vpn_gateway.pcap
+          $files = "office_traffic.pcap vpn_gateway.pcap"
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-results.bmp $files"
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-timeout.bmp --status-filter timeout $files"
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-sorted.bmp --sort-duration $files"
+          Get-ChildItem *.bmp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-screenshots
+          path: "*.bmp"
 
   msvc:
     name: Windows (MSVC)
@@ -73,4 +90,6 @@ jobs:
           cmake -B build -DSYNFIN_STATIC=ON
           cmake --build build --config Release
       - name: Test
-        run: python tests/test_sessions.py build/Release/synfin.exe
+        run: |
+          python tests/test_sessions.py build/Release/synfin.exe
+          python tests/test_gui_export.py build/Release/synfin.exe build/Release/synfin-gui.exe
