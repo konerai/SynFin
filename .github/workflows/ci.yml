@@ -71,9 +71,11 @@ jobs:
         run: python tests/test_gui_export.py synfin.exe synfin-gui.exe
       - name: Screenshots of the GUI
         run: |
-          python docs/make_demo_captures.py office_traffic.pcap
-          python docs/make_demo_captures.py vpn_gateway.pcap
-          $files = "office_traffic.pcap vpn_gateway.pcap"
+          $dir = "$env:USERPROFILE\Documents\captures"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          python docs/make_demo_captures.py "$dir\office_traffic.pcap"
+          python docs/make_demo_captures.py "$dir\vpn_gateway.pcap"
+          $files = "`"$dir\office_traffic.pcap`" `"$dir\vpn_gateway.pcap`""
           Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-results.bmp $files"
           Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-timeout.bmp --status-filter timeout $files"
           Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-sorted.bmp --sort-duration $files"

@@ -929,7 +929,7 @@ public:
         const float gap = S(16), splitter = S(12);
         const float areaTop = start.y + tileH + gap;
         const float areaH = size.y - tileH - gap;
-        if (logHeight <= 0) logHeight = std::max(S(130), areaH / 6);
+        if (logHeight <= 0) logHeight = std::max(S(150), areaH / 5);
         logHeight = std::clamp(logHeight, S(90), std::max(S(90), areaH - S(200)));
         const float sessionsH = areaH - splitter - logHeight;
 

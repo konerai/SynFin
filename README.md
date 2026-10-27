@@ -203,6 +203,8 @@ The Linux GUI looks for the binary at `build/synfin` (then `./synfin`, then `syn
 
 The row of tiles above the table counts the sessions by how they ended: **FIN** (both sides sent FIN), **RST** (reset), **Timeout** (idle longer than the timeout) and **Still open** (no FIN/RST, not idle long enough when the capture ended). Click a tile to show only those sessions, click it again (or **Sessions**) to show all.
 
+![Only the timed-out sessions, on Windows](docs/screenshots/windows-timeout.png)
+
 ### Results table
 
 Each row is one TCP session reported by the analyzer:
