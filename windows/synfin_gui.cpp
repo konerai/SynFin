@@ -441,13 +441,15 @@ public:
     // ------------------------------------------------------------------ files
 
     void AddPaths(const std::vector<std::string>& paths) {
-        for (const auto& p : paths) {
+        for (const auto& given : paths) {
             std::error_code ec;
+            fs::path path = fs::absolute(fs::u8path(given), ec);  // relative paths from the command line
+            if (ec) path = fs::u8path(given);
             std::vector<std::string> expanded;
-            if (fs::is_directory(fs::u8path(p), ec)) {
-                expanded = CapturesInFolder(fs::u8path(p));
+            if (fs::is_directory(path, ec)) {
+                expanded = CapturesInFolder(path);
             } else {
-                expanded.push_back(p);
+                expanded.push_back(path.u8string());
             }
             for (const auto& f : expanded)
                 if (std::find(files.begin(), files.end(), f) == files.end()) files.push_back(f);
@@ -1393,6 +1395,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
+        if (automated) io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);  // no hover effects in screenshots
         ImGui::NewFrame();
         ImGui::PushFont(app.fontRegular, kBase);
         app.Frame();

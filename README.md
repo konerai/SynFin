@@ -16,7 +16,7 @@
 SynFin is a multithreaded C++ tool that reads `.pcap` / `.pcapng` capture files, reconstructs TCP sessions from the raw packets, and reports each session — who opened it and to whom (IP and port), start/end timestamps, and how it ended: FIN, RST, idle timeout, or still open when the capture ended. It comes with two front ends:
 
 - **`synfin`** — the command-line analyzer for Linux and Windows (`synfin.exe`, a single portable file); prints one JSON object per session to `stdout`, ready to pipe into `jq`, a log shipper or a script.
-- **SynFin GUI** — a dark-themed desktop window for Linux (Python + Tkinter) that runs the analyzer for you and shows the sessions in a sortable, filterable table. A portable Windows GUI is in the works.
+- **SynFin GUI** — a dark-themed desktop window that runs the analyzer for you and shows the sessions in a sortable, filterable table. It looks and works the same on Linux (Python + Tkinter) and on Windows (`synfin-gui.exe`, a single portable file with the analyzer built in).
 
 ![SynFin GUI with analysis results](docs/screenshots/02-results.png)
 
@@ -40,7 +40,7 @@ It's built for offline analysis of large packet captures: instead of loading a w
 
 ## Where it runs
 
-**Linux and Windows.** The analyzer is plain C++17 with no third-party libraries — it reads capture files itself — so it builds with any recent GCC, Clang or MSVC, and as a single portable `synfin.exe` for Windows 10/11 (see [Building](#building)). The GUI is Python + Tkinter and runs on any Linux desktop (X11 or Wayland via XWayland); a portable Windows GUI is in the works.
+**Linux and Windows.** The analyzer is plain C++17 with no third-party libraries — it reads capture files itself — so it builds with any recent GCC, Clang or MSVC, and as a single portable `synfin.exe` for Windows 10/11 (see [Building](#building)). The GUI comes in two builds with the same design and features: Python + Tkinter for any Linux desktop (X11 or Wayland via XWayland), and a single portable `synfin-gui.exe` for Windows 10/11.
 
 Tested builds (the analyzer builds without warnings with `-Wall -Wextra` and passes the [test suite](#tests)):
 
@@ -75,7 +75,12 @@ python3 gui/synfin_gui.py   # needs Tkinter, see below
 
 ### Windows (x64)
 
-`synfin-<version>-windows-x64.exe` is a single portable file for 64-bit Windows 10 and 11 — nothing to install. Put it anywhere (rename it to `synfin.exe` if you like) and:
+Two single portable files for 64-bit Windows 10 and 11 — nothing to install, put them anywhere:
+
+- **`synfin-gui-<version>-windows-x64.exe`** — the [graphical interface](#graphical-interface) with the analyzer built in. Double-click it, or drop captures or folders onto it or onto its window.
+- **`synfin-<version>-windows-x64.exe`** — the command-line analyzer.
+
+Rename them to `synfin-gui.exe` and `synfin.exe` if you like. The command-line one can be used like this:
 
 - **drop capture files onto it** in Explorer — a window opens with the sessions and stays open until you press Enter;
 - **double-click it** to see the help;
@@ -86,7 +91,7 @@ synfin.exe -i C:\captures\office.pcapng
 synfin.exe -d C:\captures -t 300 > sessions.jsonl
 ```
 
-The first time, Windows SmartScreen may say *"Windows protected your PC"* because the exe isn't code-signed: click **More info → Run anyway**. In Windows PowerShell 5.1, `>` writes UTF-16; use `| Set-Content -Encoding utf8 sessions.jsonl` to get a UTF-8 file for other tools.
+The first time, Windows SmartScreen may say *"Windows protected your PC"* because the exes aren't code-signed: click **More info → Run anyway**. In Windows PowerShell 5.1, `>` writes UTF-16; use `| Set-Content -Encoding utf8 sessions.jsonl` to get a UTF-8 file for other tools.
 
 To build from source instead, read on.
 
@@ -132,7 +137,7 @@ make
 
 This produces the `synfin` binary in `build/`.
 
-### Windows command-line build
+### Windows build
 
 `synfin.exe` is cross-compiled from Linux with MinGW-w64 into a single static file that runs on 64-bit Windows 10/11 without installing anything:
 
@@ -142,21 +147,38 @@ cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x86_64.cmake
 cmake --build build-win
 ```
 
-It also builds natively with Visual Studio 2022 (`cmake -B build -DSYNFIN_STATIC=ON && cmake --build build --config Release`). The exe carries the SynFin icon and version, and accepts file names in any language. A Windows GUI is in the works.
+With [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (what CI uses) put its `bin/` on `PATH` and use `cmake/toolchain-llvm-mingw-x86_64.cmake` instead.
+
+This builds both `synfin.exe` and the GUI, `synfin-gui.exe`. They also build natively with Visual Studio 2022 (`cmake -B build -DSYNFIN_STATIC=ON && cmake --build build --config Release`). Both exes carry the SynFin icon and version and accept file names in any language; the GUI needs nothing but Windows' own DLLs (Direct3D 11 is part of Windows 10/11, and it falls back to software rendering where there is no GPU).
 
 ### Continuous integration
 
-Every push and pull request is built and tested by [GitHub Actions](.github/workflows/ci.yml): on Linux with GCC, as a MinGW cross-built `synfin.exe` that is then tested on a real Windows machine, and natively with MSVC.
+Every push and pull request is built and tested by [GitHub Actions](.github/workflows/ci.yml): on Linux with GCC; as `synfin.exe` and `synfin-gui.exe` cross-built with llvm-mingw that are then tested on a real Windows machine (including the GUI's exports and the Windows screenshots in this README); and natively with MSVC.
 
 ## Graphical interface
 
-`gui/synfin_gui.py` is a dark-themed desktop front end for the analyzer. Build the analyzer first (see above), then from the project root:
+The GUI has the same dark design and the same features on Linux and on Windows; the sections below apply to both.
+
+![SynFin on Windows](docs/screenshots/windows-results.png)
+
+### On Windows
+
+`synfin-gui.exe` is one portable file with the analyzer, fonts and icon inside; it doesn't write any settings files. Start it by double-clicking, or:
+
+- **drop** `.pcap` / `.pcapng` files or whole folders onto its window to add them;
+- **drop** them onto the exe (or pass them on the command line, `synfin-gui.exe capture.pcapng`) — the analysis starts right away.
+
+The progress bar shows how much of the input has been read, the title bar follows the dark theme, and the window scales cleanly at any display scaling (125 %, 150 %, …). Since the analyzer is built in, there's no analyzer path to set and the badge in the corner always shows the exe's own version.
+
+### On Linux
+
+`gui/synfin_gui.py` runs the `synfin` binary. Build the analyzer first (see above), then from the project root:
 
 ```bash
 python3 gui/synfin_gui.py
 ```
 
-### Add SynFin to the application menu
+#### Add SynFin to the application menu
 
 To launch SynFin from your desktop's application menu or dock, with its icon:
 
@@ -166,15 +188,15 @@ gui/install-desktop-entry.sh
 
 This installs a `synfin.desktop` entry and the icon for the current user only (under `~/.local/share`, no root needed). It points at the GUI where it is now, so run it again if you move the folder. Remove it with `gui/install-desktop-entry.sh --uninstall`.
 
-The GUI looks for the binary at `build/synfin` (then `./synfin`, then `synfin` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
+The Linux GUI looks for the binary at `build/synfin` (then `./synfin`, then `synfin` on `PATH`); another one can be chosen under **Settings → Analyzer binary**. The badge in the top-right corner shows the analyzer's version, or *Analyzer not found* in red.
 
 ![Main window before an analysis](docs/screenshots/01-start.png)
 
 ### Workflow
 
-1. **Captures** — **Add files…** picks one or more `.pcap` files, **Add folder…** adds every `.pcap` file in a directory. **Remove** (or the <kbd>Delete</kbd> key) deletes the selected entries, **Clear** empties the list.
+1. **Captures** — **Add files…** picks one or more `.pcap` / `.pcapng` files, **Add folder…** adds every capture in a directory. **Remove** (or the <kbd>Delete</kbd> key) deletes the selected entries, **Clear** empties the list.
 2. **Settings** — **Timeout, s** is the idle time after which an unfinished session is reported as timed out (`--timeout`); **Threads** is the number of worker threads (`--threads`, defaults to the number of CPU cores).
-3. **Analyze** — runs `synfin` on all listed files. A progress bar runs while it works and sessions appear in the table as they are reported; **Stop** terminates it early.
+3. **Analyze** — runs the analyzer on all listed files. A progress bar runs while it works and sessions appear in the table as they are reported; **Stop** ends it early.
 4. **Explore and export** the results (see below).
 
 ### Summary tiles
@@ -278,7 +300,7 @@ Each session is printed to `stdout` as a single-line JSON object:
    Sessions left open when the input ends are reported too, with `closed_by: "end_of_capture"`.
 5. **Output** – a dedicated output thread drains completed sessions from a queue and prints one JSON object per line to `stdout`, so results can be consumed while analysis is still running.
 
-The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
+The Windows GUI runs the same analyzer code in-process and receives the sessions directly. The Linux GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files…>` as a subprocess (through `stdbuf -oL` when available, so rows arrive line by line), parses each JSON line from `stdout` into a table row and shows everything else in the log.
 
 ## Project layout
 
@@ -290,14 +312,20 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 | `tcp_ip_headers.h` | Link-layer, IPv4 and TCP header parsing |
 | `blocking_queue.h` | Thread-safe queue between the reader, the workers and the output thread |
 | `CMakeLists.txt` | Build configuration (the version number lives here) |
-| `cmake/toolchain-mingw-w64-x86_64.cmake` | Cross-compiling for Windows with MinGW-w64 |
+| `cmake/toolchain-mingw-w64-x86_64.cmake` | Cross-compiling for Windows with GCC MinGW-w64 |
+| `cmake/toolchain-llvm-mingw-x86_64.cmake` | Cross-compiling for Windows with llvm-mingw |
 | `windows/` | Windows icon and the resource file with the exe's version info |
 | `.github/workflows/ci.yml` | Builds and tests on Linux and Windows |
-| `gui/synfin_gui.py` | Tkinter GUI |
+| `gui/synfin_gui.py` | Linux GUI (Tkinter) |
+| `windows/synfin_gui.cpp` | Windows GUI (Dear ImGui on Direct3D 11) |
+| `windows/fonts/` | Inter and JetBrains Mono, embedded in the Windows GUI (SIL Open Font License) |
+| `third_party/imgui/` | [Dear ImGui](https://github.com/ocornut/imgui) 1.92.9b, unmodified (MIT license) |
 | `gui/icons/` | App icon in sizes from 16 to 512 px |
 | `gui/install-desktop-entry.sh` | Adds SynFin to the application menu |
 | `tests/test_sessions.py` | End-to-end test with a synthetic capture |
 | `docs/screenshots/` | Screenshots used in this README |
+| `docs/make_demo_captures.py` | Writes the captures shown in the screenshots |
+| `tests/test_gui_export.py` | Checks that the Windows GUI exports the same sessions as the command line |
 
 ## Tests
 
@@ -306,6 +334,8 @@ The GUI is a thin wrapper: it starts `synfin -t <timeout> -j <threads> -i <files
 ```bash
 python3 tests/test_sessions.py build/synfin
 ```
+
+On Windows, `tests/test_gui_export.py synfin.exe synfin-gui.exe` also checks that the GUI's CSV and JSON Lines exports contain exactly the sessions the command line reports.
 
 ## Known limitations
 

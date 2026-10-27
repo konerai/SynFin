@@ -20,20 +20,27 @@ jobs:
         run: python3 tests/test_sessions.py build/synfin
 
   windows-exe:
-    name: Windows exes (MinGW cross-build)
+    name: Windows exes (llvm-mingw cross-build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      LLVM_MINGW: llvm-mingw-20261006-msvcrt-ubuntu-22.04-x86_64
+      LLVM_MINGW_SHA256: 9dd3bbff7f746937c99b38322c8b1fcab8054b7d8d31ec840b3457234dff7e52
     steps:
       - uses: actions/checkout@v4
-      - name: Install MinGW-w64
-        # Time out and retry instead of hanging when a package mirror stalls.
+      - name: Install llvm-mingw
+        # A pinned, checksummed release from GitHub instead of apt: Ubuntu package
+        # mirrors have stalled this job for minutes more than once.
         run: |
-          APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          sudo apt-get $APT update
-          sudo apt-get $APT install -y --no-install-recommends g++-mingw-w64-x86-64-posix
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" \
+               "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW.tar.xz"
+          echo "$LLVM_MINGW_SHA256  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
       - name: Build
         run: |
-          cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x86_64.cmake \
+          cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-x86_64.cmake \
                 -DSYNFIN_STATIC=ON -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
           cmake --build build-win
       - uses: actions/upload-artifact@v4
