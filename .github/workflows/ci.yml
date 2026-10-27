@@ -20,29 +20,38 @@ jobs:
         run: python3 tests/test_sessions.py build/synfin
 
   windows-exe:
-    name: Windows exe (MinGW cross-build)
+    name: Windows exes (llvm-mingw cross-build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      LLVM_MINGW: llvm-mingw-20261006-msvcrt-ubuntu-22.04-x86_64
+      LLVM_MINGW_SHA256: 9dd3bbff7f746937c99b38322c8b1fcab8054b7d8d31ec840b3457234dff7e52
     steps:
       - uses: actions/checkout@v4
-      - name: Install MinGW-w64
-        # Time out and retry instead of hanging when a package mirror stalls.
+      - name: Install llvm-mingw
+        # A pinned, checksummed release from GitHub instead of apt: Ubuntu package
+        # mirrors have stalled this job for minutes more than once.
         run: |
-          APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          sudo apt-get $APT update
-          sudo apt-get $APT install -y --no-install-recommends g++-mingw-w64-x86-64-posix
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/llvm-mingw.tar.xz" \
+               "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW.tar.xz"
+          echo "$LLVM_MINGW_SHA256  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "$RUNNER_TEMP/llvm-mingw/bin" >> "$GITHUB_PATH"
       - name: Build
         run: |
-          cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x86_64.cmake \
+          cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-llvm-mingw-x86_64.cmake \
                 -DSYNFIN_STATIC=ON -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror"
           cmake --build build-win
       - uses: actions/upload-artifact@v4
         with:
           name: synfin-windows-x64
-          path: build-win/synfin.exe
+          path: |
+            build-win/synfin.exe
+            build-win/synfin-gui.exe
 
   windows-test:
-    name: Windows exe on Windows
+    name: Windows exes on Windows
     needs: windows-exe
     runs-on: windows-latest
     timeout-minutes: 15
@@ -54,10 +63,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Test
+      - name: Test the command-line exe
         run: |
           .\synfin.exe --version
           python tests/test_sessions.py synfin.exe
+      - name: Test the GUI
+        run: python tests/test_gui_export.py synfin.exe synfin-gui.exe
+      - name: Screenshots of the GUI
+        run: |
+          $dir = "$env:USERPROFILE\Documents\captures"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          python docs/make_demo_captures.py "$dir\office_traffic.pcap"
+          python docs/make_demo_captures.py "$dir\vpn_gateway.pcap"
+          $files = "`"$dir\office_traffic.pcap`" `"$dir\vpn_gateway.pcap`""
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-results.bmp $files"
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-timeout.bmp --status-filter timeout $files"
+          Start-Process -Wait .\synfin-gui.exe "--size 1360x840 --capture windows-sorted.bmp --sort-duration $files"
+          Get-ChildItem *.bmp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-screenshots
+          path: "*.bmp"
 
   msvc:
     name: Windows (MSVC)
@@ -73,4 +99,6 @@ jobs:
           cmake -B build -DSYNFIN_STATIC=ON
           cmake --build build --config Release
       - name: Test
-        run: python tests/test_sessions.py build/Release/synfin.exe
+        run: |
+          python tests/test_sessions.py build/Release/synfin.exe
+          python tests/test_gui_export.py build/Release/synfin.exe build/Release/synfin-gui.exe

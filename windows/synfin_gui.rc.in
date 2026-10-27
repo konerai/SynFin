@@ -1,0 +1,39 @@
+// Windows resources of the GUI: icon, embedded fonts, manifest and version info.
+#include <winver.h>
+#include "@SYNFIN_SOURCE_DIR@/windows/gui_resources.h"
+
+IDI_SYNFIN ICON "@SYNFIN_SOURCE_DIR@/windows/synfin.ico"
+
+IDR_FONT_REGULAR RCDATA "@SYNFIN_SOURCE_DIR@/windows/fonts/Inter-Regular.otf"
+IDR_FONT_BOLD RCDATA "@SYNFIN_SOURCE_DIR@/windows/fonts/Inter-Bold.otf"
+IDR_FONT_MONO RCDATA "@SYNFIN_SOURCE_DIR@/windows/fonts/JetBrainsMono-Regular.ttf"
+
+@SYNFIN_MANIFEST_LINE@
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "SynFin"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "synfin-gui"
+            VALUE "OriginalFilename", "SynFin.exe"
+            VALUE "ProductName", "SynFin"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+            VALUE "LegalCopyright", "konerai"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

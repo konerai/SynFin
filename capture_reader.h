@@ -74,6 +74,9 @@ public:
     uint32_t PcapLinkType() const { return format_ == Format::Pcap ? pcap_link_type_ : 0; }
     bool IsPcapng() const { return format_ == Format::Pcapng; }
 
+    // Bytes of the file consumed so far.
+    uint64_t Position() const { return position_; }
+
     // Returns 1 and fills `packet`, 0 at the end of the file, or -1 with `error` set.
     int Next(CapturedPacket& packet, std::string& error) {
         return format_ == Format::Pcap ? NextPcap(packet, error) : NextPcapng(packet, error);
@@ -92,6 +95,7 @@ private:
 
     bool ReadExact(void* dst, size_t n) {
         in_.read(static_cast<char*>(dst), static_cast<std::streamsize>(n));
+        position_ += static_cast<uint64_t>(in_.gcount());
         return static_cast<size_t>(in_.gcount()) == n;
     }
 
@@ -112,6 +116,7 @@ private:
     int NextPcap(CapturedPacket& packet, std::string& error) {
         uint8_t header[16];
         in_.read(reinterpret_cast<char*>(header), sizeof(header));
+        position_ += static_cast<uint64_t>(in_.gcount());
         if (in_.gcount() == 0) return 0;
         if (in_.gcount() != sizeof(header)) {
             error = "truncated packet header at the end of the file";
@@ -172,6 +177,7 @@ private:
         for (;;) {
             uint8_t head[8];
             in_.read(reinterpret_cast<char*>(head), sizeof(head));
+            position_ += static_cast<uint64_t>(in_.gcount());
             if (in_.gcount() == 0) return 0;
             if (in_.gcount() != sizeof(head)) {
                 error = "truncated block at the end of the file";
@@ -181,6 +187,7 @@ private:
             if (type == 0x0A0D0D0A) {
                 // A new section; its byte order may differ, so re-read the length with it.
                 in_.seekg(-4, std::ios::cur);
+                position_ -= 4;
                 if (!ReadSectionHeader(error)) return -1;
                 continue;
             }
@@ -296,6 +303,7 @@ private:
 
     std::ifstream in_;
     char buffer_[1 << 16];
+    uint64_t position_ = 0;
     Format format_ = Format::Pcap;
 
     // classic pcap

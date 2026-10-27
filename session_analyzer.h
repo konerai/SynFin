@@ -1,8 +1,10 @@
 #ifndef SESSION_ANALYZER_H
 #define SESSION_ANALYZER_H
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -16,6 +18,24 @@
 
 class SessionAnalyzer {
 public:
+    enum class CloseReason { Fin, Rst, Timeout, EndOfCapture };
+
+    // A finished session, as reported to the session sink.
+    struct SessionRecord {
+        uint32_t src_ip;    // the endpoint that opened the connection
+        uint16_t src_port;
+        uint32_t dst_ip;
+        uint16_t dst_port;
+        Timestamp start;
+        Timestamp end;
+        CloseReason reason;
+    };
+
+    // Called from the output thread for every session; by default prints its JSON line.
+    using SessionSink = std::function<void(const SessionRecord&)>;
+    // Called with errors and warnings about the input; by default prints them to stderr.
+    using MessageSink = std::function<void(const std::string&)>;
+
     // queue_size is the number of packets that may wait for each worker thread.
     SessionAnalyzer(long timeout = 600, unsigned int threads = std::thread::hardware_concurrency(),
                     unsigned int queue_size = 2048)
@@ -25,7 +45,20 @@ public:
             workerQueues.push_back(std::make_unique<BlockingQueue<Batch>>(batches));
         }
         pending.resize(numThreads);
+        sessionSink = [](const SessionRecord& record) { std::cout << ToJson(record) << "\n"; };
+        messageSink = [](const std::string& message) { std::cerr << message << std::endl; };
     }
+
+    void SetSessionSink(SessionSink sink) { sessionSink = std::move(sink); }
+    void SetMessageSink(MessageSink sink) { messageSink = std::move(sink); }
+
+    // Stops reading as soon as possible; sessions still open are dropped, not reported.
+    // Safe to call from any thread.
+    void Cancel() { cancelled = true; }
+    bool Cancelled() const { return cancelled; }
+
+    // Bytes read from the current and all previous input files.
+    uint64_t BytesProcessed() const { return bytesProcessed; }
 
     ~SessionAnalyzer() {
         Stop();
@@ -57,25 +90,31 @@ public:
         CaptureReader reader;
         std::string error;
         if (!reader.Open(path, error)) {
-            std::cerr << "Error opening file " << filename << ": " << error << std::endl;
+            messageSink("Error opening file " + filename + ": " + error);
             return;
         }
         if (!reader.IsPcapng() && !IsSupportedLinkType(reader.PcapLinkType())) {
-            std::cerr << "Error: Unsupported link-layer type " << reader.PcapLinkType()
-                      << " in " << filename << "." << std::endl;
+            messageSink("Error: Unsupported link-layer type " + std::to_string(reader.PcapLinkType()) +
+                        " in " + filename + ".");
             return;
         }
+        const uint64_t bytesBefore = bytesProcessed;
 
         const int kCheckTimeoutInterval = 1000;
         int packetCount = 0;
         bool warnedLinkType = false;
         CapturedPacket packet;
         int ret;
+        int packetsRead = 0;
         while ((ret = reader.Next(packet, error)) > 0) {
+            if (++packetsRead % 4096 == 0) {
+                if (cancelled) break;
+                bytesProcessed = bytesBefore + reader.Position();
+            }
             if (!IsSupportedLinkType(packet.link_type)) {
                 if (!warnedLinkType) {
-                    std::cerr << "Warning: skipping packets with unsupported link-layer type "
-                              << packet.link_type << " in " << filename << "." << std::endl;
+                    messageSink("Warning: skipping packets with unsupported link-layer type " +
+                                std::to_string(packet.link_type) + " in " + filename + ".");
                     warnedLinkType = true;
                 }
                 continue;
@@ -100,14 +139,47 @@ public:
         }
 
         if (ret < 0) {
-            std::cerr << "Error reading file " << filename << ": " << error << std::endl;
+            messageSink("Error reading file " + filename + ": " + error);
         }
+        bytesProcessed = bytesBefore + reader.Position();
         FlushPending();
+    }
+
+    static std::string FormatIp(uint32_t ip) {
+        return std::to_string((ip >> 24) & 0xFF) + "." + std::to_string((ip >> 16) & 0xFF) + "." +
+               std::to_string((ip >> 8) & 0xFF) + "." + std::to_string(ip & 0xFF);
+    }
+
+    static const char* CloseReasonName(CloseReason reason) {
+        switch (reason) {
+            case CloseReason::Fin: return "fin";
+            case CloseReason::Rst: return "rst";
+            case CloseReason::Timeout: return "timeout";
+            case CloseReason::EndOfCapture: return "end_of_capture";
+        }
+        return "unknown";
+    }
+
+    // The session as one line of JSON, as synfin prints it.
+    static std::string ToJson(const SessionRecord& record) {
+        std::ostringstream oss;
+        oss << "{" << "\"source\":{" << "\"ip\":\"" << FormatIp(record.src_ip) << "\"," << "\"port\":" << record.src_port << "},"
+            << "\"destination\":{" << "\"ip\":\"" << FormatIp(record.dst_ip) << "\"," << "\"port\":" << record.dst_port << "},"
+            << "\"start_time\":{" << "\"seconds\":" << record.start.sec << "," << "\"microseconds\":" << record.start.usec << "},"
+            << "\"end_time\":{" << "\"seconds\":" << record.end.sec << "," << "\"microseconds\":" << record.end.usec << "}";
+
+        if (record.reason == CloseReason::Timeout) {
+            oss << ",\"timeout\":true";
+        }else{
+            oss << ", \"timeout\":false";
+        }
+        oss << ",\"closed_by\":\"" << CloseReasonName(record.reason) << "\"";
+        oss << "}";
+        return oss.str();
     }
 
 private:
     enum class PacketType { Data, TimeoutCheck };
-    enum class CloseReason { Fin, Rst, Timeout, EndOfCapture };
 
     class SessionKey {
     public:
@@ -318,6 +390,8 @@ private:
             }
         }
 
+        if (cancelled) return;
+
         // Input is exhausted: report what is left instead of dropping it.
         CheckForTimeouts(sessions, closed, latest_time);
         for (const auto& entry : sessions) {
@@ -330,60 +404,29 @@ private:
         outputQueue.Push(FinalSession(key, session, reason));
     }
 
-    static std::string FormatIp(uint32_t ip) {
-        return std::to_string((ip >> 24) & 0xFF) + "." + std::to_string((ip >> 16) & 0xFF) + "." +
-               std::to_string((ip >> 8) & 0xFF) + "." + std::to_string(ip & 0xFF);
-    }
-
     void OutputThread() {
         FinalSession fs;
         while (outputQueue.Pop(fs)) {
             const SessionKey& key = fs.key;
             const SessionInfo& session = fs.info;
-            bool timeout = fs.reason == CloseReason::Timeout;
-
-            uint32_t src_ip, dst_ip;
-            uint16_t src_port, dst_port;
-
+            SessionRecord record;
             if (session.initiator_is_ip1) {
-                src_ip = key.ip1;
-                src_port = key.port1;
-                dst_ip = key.ip2;
-                dst_port = key.port2;
+                record.src_ip = key.ip1;
+                record.src_port = key.port1;
+                record.dst_ip = key.ip2;
+                record.dst_port = key.port2;
             } else {
-                src_ip = key.ip2;
-                src_port = key.port2;
-                dst_ip = key.ip1;
-                dst_port = key.port1;
+                record.src_ip = key.ip2;
+                record.src_port = key.port2;
+                record.dst_ip = key.ip1;
+                record.dst_port = key.port1;
             }
-
-            std::ostringstream oss;
-            oss << "{" << "\"source\":{" << "\"ip\":\"" << FormatIp(src_ip) << "\"," << "\"port\":" << src_port << "},"
-                << "\"destination\":{" << "\"ip\":\"" << FormatIp(dst_ip) << "\"," << "\"port\":" << dst_port << "},"
-                << "\"start_time\":{" << "\"seconds\":" << session.start_time.sec << "," << "\"microseconds\":" << session.start_time.usec << "},"
-                << "\"end_time\":{" << "\"seconds\":" << session.end_time.sec << "," << "\"microseconds\":" << session.end_time.usec << "}";
-
-            if (timeout) {
-                oss << ",\"timeout\":true";
-            }else{
-                oss << ", \"timeout\":false";
-            }
-            oss << ",\"closed_by\":\"" << CloseReasonName(fs.reason) << "\"";
-            oss << "}";
-
-            std::cout << oss.str() << "\n";
+            record.start = session.start_time;
+            record.end = session.end_time;
+            record.reason = fs.reason;
+            sessionSink(record);
         }
         std::cout.flush();
-    }
-
-    static const char* CloseReasonName(CloseReason reason) {
-        switch (reason) {
-            case CloseReason::Fin: return "fin";
-            case CloseReason::Rst: return "rst";
-            case CloseReason::Timeout: return "timeout";
-            case CloseReason::EndOfCapture: return "end_of_capture";
-        }
-        return "unknown";
     }
 
     long sessionTimeout;
@@ -396,6 +439,11 @@ private:
     std::vector<std::thread> workerThreads;
     std::thread outputThreadObj;
     SessionKeyHash sessionKeyHasher;
+
+    SessionSink sessionSink;
+    MessageSink messageSink;
+    std::atomic<bool> cancelled{false};
+    std::atomic<uint64_t> bytesProcessed{0};
 };
 
 #endif // SESSION_ANALYZER_H
